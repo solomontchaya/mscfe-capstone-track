@@ -4,17 +4,20 @@ from utils import process_local_chunks
 
 if __name__ == "__main__":
     
-    # Adjust these paths to point to your local directories inside VS Code
-    # Assuming your raw data sits inside directories named after each ticker:
-    # e.g., data/raw/TSLA/, data/raw/AAPL/, etc.
-    BASE_RAW_DIR = "../data/raw/StockTwits_2020_2022_Raw"
-    PROCESSED_DATA_DIR = "../data/processed/StockTwits_2020_2022_Raw"
+    # Establish a fixed structural anchor based on this script's location
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))     
+    BASE_DIR = os.path.dirname(SCRIPT_DIR)                       
+    
+    # Build absolute paths to your data folders
+    BASE_RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
+    PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
     
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     
-    # The five major growth tickers present in your Kaggle data download
+    # Target growth universe
     TARGET_UNIVERSE = ["AMZN", "AAPL", "NVDA", "TSLA"]
     
+    # Uniform structural window boundaries
     START_HORIZON = "2020-01-01"
     END_HORIZON = "2022-03-01"
     
@@ -26,12 +29,19 @@ if __name__ == "__main__":
         print(f"LAUNCHING PIPELINE FOR TARGET ASSET FLUX: {ticker}")
         print("="*60)
         
-        # Point specifically to the directory holding that asset's files
+        # Point to the specific raw data folder for this asset
         ticker_raw_folder = os.path.join(BASE_RAW_DIR, ticker)
         
+        # Output clean panels as [TICKER].csv inside data/processed/
         output_file_name = f"{ticker}.csv"
         destination_path = os.path.join(PROCESSED_DATA_DIR, output_file_name)
         
+        # Verify the source directory actually exists before processing
+        if not os.path.exists(ticker_raw_folder):
+            print(f"Execution Error: Raw data directory missing for {ticker}")
+            print(f"Expected Path: {ticker_raw_folder}")
+            continue
+            
         process_local_chunks(
             raw_data_dir=ticker_raw_folder,
             output_csv_path=destination_path,
@@ -44,6 +54,6 @@ if __name__ == "__main__":
         print(f"Completed execution cycle for {ticker} in {elapsed:.2f} seconds.")
         
     print("\n" + "="*60)
-    print("ALL UNIVERSES PREPROCESSED SEAMLESSLY FOR MODULE 3 ARCHITECTURE")
-    print(f"Total processing time: {(time.time() - total_start_time)/60:.2f} minutes.")
+    print("ALL UNIVERSAL PANELS PROCESSED AND LOG-SHIFTED FOR REGIME PROCESSING")
+    print(f"Total pipeline execution time: {(time.time() - total_start_time)/60:.2f} minutes.")
     print("="*60)

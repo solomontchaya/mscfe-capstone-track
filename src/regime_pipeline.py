@@ -5,10 +5,14 @@ from utils import fit_market_hmm, generate_regime_features
 
 if __name__ == "__main__":
     
-    # Standardize input and output directories matching your architecture
-    PROCESSED_DATA_DIR = "../data/processed/StockTwits_2020_2022_Raw"
+    # Establish a fixed structural anchor based on this script's location
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))      
+    BASE_DIR = os.path.dirname(SCRIPT_DIR)                       
     
-    # The 4 fully validated, truncated tickers matching your 544-row panels
+    # Anchor directly to the verified processed absolute directory layout
+    PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
+    
+    # The 4 fully validated, truncated tickers matching your 545-row panels
     VALIDATED_UNIVERSE = ["TSLA", "AAPL", "AMZN", "NVDA"]
     
     print("="*70)
@@ -23,7 +27,6 @@ if __name__ == "__main__":
         print("-" * 50)
         
         # Build paths dynamically based on your file naming structure
-        # (Handles both 'TICKER_processed_panel.csv' and 'TICKER.csv' configurations)
         potential_files = [
             f"{ticker}_processed_panel.csv",
             f"{ticker}.csv"
