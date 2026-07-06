@@ -1,6 +1,6 @@
 import os
 import time
-from utils.process_data import process_local_chunks
+from utils import process_local_chunks
 
 if __name__ == "__main__":
     

@@ -7,6 +7,7 @@ import numpy as np
 import yfinance as yf
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from hmmlearn.hmm import GaussianHMM
 
 def extract_sentiment_score(entities_str):
     """
@@ -148,51 +149,61 @@ def process_local_chunks(raw_data_dir, output_csv_path, ticker, start_date, end_
     print(f"=== Success! Processed panel saved to: {output_csv_path} ===")
 
 
-# =====================================================================
-# CHRONOLOGICAL EXECUTION ENTRY POINT (The Main Sweep Loop)
-# =====================================================================
-if __name__ == "__main__":
+def generate_regime_features(file_path):
+    """
+    Safely loads the point-in-time processed dataset and generates 
+    the necessary stationary features for HMM fitting.
+    """
+    df = pd.read_csv(file_path, parse_dates=['Date'])
     
-    # Adjust these paths to point to your local directories inside VS Code
-    # Assuming your raw data sits inside directories named after each ticker:
-    # e.g., data/raw/TSLA/, data/raw/AAPL/, etc.
-    BASE_RAW_DIR = "../data/raw"
-    PROCESSED_DATA_DIR = "../data/processed"
+    # Ensure Date is the index and drop any completely blank artifacts
+    df = df.set_index('Date').sort_index()
     
-    os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+    # Calculate log returns and continuous intraday volatility spread
+    df['log_ret'] = np.log(df['Close'] / df['Close'].shift(1))
+    df['hl_spread'] = np.log(df['High'] / df['Low'])
     
-    # The five major growth tickers present in your Kaggle data download
-    TARGET_UNIVERSE = ["AMZN", "FB", "AAPL", "NVDA", "TSLA"]
+    # CRITICAL: Drop rows with NaN caused by shifting or zero-division
+    df = df.dropna(subset=['log_ret', 'hl_spread'])
     
-    START_HORIZON = "2020-01-01"
-    END_HORIZON = "2022-12-31"
+    # Drop infinite values if any intraday spreads hit exactly 0 (High == Low)
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['log_ret', 'hl_spread'])
     
-    total_start_time = time.time()
+    return df
+
+def fit_market_hmm(df, n_regimes=2):
+    """
+    Fits a full-covariance Gaussian Hidden Markov Model over market features
+    with fail-safes to protect against 'NoneType' attribute slicing errors.
+    """
+    # Extract structural feature matrices
+    features = df[['log_ret', 'hl_spread']].values
     
-    for ticker in TARGET_UNIVERSE:
-        ticker_start = time.time()
-        print("\n" + "="*60)
-        print(f"LAUNCHING PIPELINE FOR TARGET ASSET FLUX: {ticker}")
-        print("="*60)
+    if features.shape[0] == 0:
+        raise ValueError("Feature matrix is empty. Check data slicing parameters.")
+
+    # Initialize and train the full covariance HMM sequence engine
+    model = GaussianHMM(
+        n_components=n_regimes, 
+        covariance_type="full", 
+        n_iter=100, 
+        random_state=42
+    )
+    model.fit(features)
+    
+    # Predict latent state paths and extract dynamic posterior weights
+    hidden_states = model.predict(features)
+    posteriors = model.predict_proba(features)
+    
+    # Defensive programming check: Verify posteriors array is valid before subscripting
+    if posteriors is None:
+        raise TypeError("The HMM fit sequence failed to generate valid probability distributions.")
         
-        # Point specifically to the directory holding that asset's files
-        ticker_raw_folder = os.path.join(BASE_RAW_DIR, ticker)
+    # Safely attach continuous regimes and discrete tokens to a clean dataframe copy
+    df_out = df.copy()
+    for i in range(n_regimes):
+        df_out[f'Prob_Regime_{i}'] = posteriors[:, i]  # <-- Where the script was failing if None
         
-        output_file_name = f"{ticker}_processed_panel.csv"
-        destination_path = os.path.join(PROCESSED_DATA_DIR, output_file_name)
-        
-        process_local_chunks(
-            raw_data_dir=ticker_raw_folder,
-            output_csv_path=destination_path,
-            ticker=ticker,
-            start_date=START_HORIZON,
-            end_date=END_HORIZON
-        )
-        
-        elapsed = time.time() - ticker_start
-        print(f"Completed execution cycle for {ticker} in {elapsed:.2f} seconds.")
-        
-    print("\n" + "="*60)
-    print("ALL UNIVERSES PREPROCESSED SEAMLESSLY FOR MODULE 3 ARCHITECTURE")
-    print(f"Total processing time: {(time.time() - total_start_time)/60:.2f} minutes.")
-    print("="*60)
+    df_out['Hidden_State'] = hidden_states
+    
+    return model, df_out
