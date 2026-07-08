@@ -5,22 +5,36 @@ from portfolio_engine import load_saved_posterior, generate_bayesian_inputs, opt
 
 def load_historical_backtest_data(processed_dir):
     """
-    UPDATE 1: Load your real compiled 2020-2022 CSV master dataset.
+    Dynamically loads and combines individual ticker CSVs containing regime alignments.
     """
-    print("[DATA] Loading 2020-2022 Stocktwits & Asset Matrix...")
+    print("[DATA] Ingesting and compiling per-ticker regime datasets...")
     
-    # ASSUMPTION: You have a master CSV file containing rows for each date/ticker combo.
-    # Adjust the filename ('master_data.csv') to match your actual file.
-    csv_path = os.path.join(processed_dir, "master_data.csv")
+    tickers = ["TSLA", "AAPL", "AMZN", "NVDA"]
+    combined_records = []
     
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"Could not find historical data file at {csv_path}. Please place your 2020-2022 data here.")
+    for ticker in tickers:
+        # Build the dynamic file name matching your directory structure
+        file_name = f"{ticker}_with_regimes.csv"
+        file_path = os.path.join(processed_dir, file_name)
         
-    df = pd.read_csv(csv_path)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Missing expected data asset: {file_path}")
+            
+        # Read individual asset frame
+        df_ticker = pd.read_csv(file_path)
+        
+        # Inject the Ticker identifier so the cross-sectional indexer can find it
+        df_ticker['Ticker'] = ticker
+        
+        combined_records.append(df_ticker)
+        
+    # Stack all tickers vertically into one uniform dataset
+    master_df = pd.concat(combined_records, ignore_index=True)
     
-    # Ensure standard datetime parsing
-    df['Date'] = pd.to_datetime(df['Date'])
-    return df
+    # Ensure uniform datetime indexing
+    master_df['Date'] = pd.to_datetime(master_df['Date'])
+    
+    return master_df
 
 def run_rolling_backtest():
     # 1. Structural Path mapping
@@ -34,7 +48,7 @@ def run_rolling_backtest():
     try:
         master_df = load_historical_backtest_data(PROCESSED_DIR)
     except Exception as e:
-        print(f"❌ Data Load Error: {e}")
+        print(f"Data Load Error: {e}")
         return
     
     # 2. Define historical execution timeline (Post 6-month warmup phase)
@@ -43,7 +57,7 @@ def run_rolling_backtest():
     portfolio_records = []
     current_weights = np.array([0.25, 0.25, 0.25, 0.25]) # Start equal-weighted
     
-    print(f"🚀 Initializing Backtest Engine across {len(rebalance_dates)} periods...")
+    print(f"Initializing Backtest Engine across {len(rebalance_dates)} periods...")
     
     for date in rebalance_dates:
         date_str = date.strftime('%Y-%m-%d')
@@ -52,27 +66,40 @@ def run_rolling_backtest():
         period_df = master_df[master_df['Date'] == date]
         
         if period_df.empty or len(period_df) < len(tickers):
-            print(f"⚠️ Warning: Missing or incomplete data data for {date_str}. Skipping week.")
+            # Safe catch for data gaps or the initial warmup edge cases
             continue
 
         # Ensure consistent indexing alignment across your tickers
         period_df = period_df.set_index('Ticker').reindex(tickers)
         
         # =====================================================================
-        # UPDATE 2: REPLACING DATA LOOKUP PLACEHOLDERS WITH REAL TIME SERIES
+        # MATCHING YOUR EXACT CSV HEADERS
         # =====================================================================
-        
-        # 1. Look up the true active regime probability or predicted discrete state output from your HMM
-        # Assumes a column named 'Predicted_Regime' exists in your CSV
-        predicted_regime = int(period_df['Predicted_Regime'].iloc[0]) 
+        REGIME_COL = 'Hidden_State'        
+        # =====================================================================
+
+        # Safe verification: Check if our exact regime column target exists and isn't null
+        if REGIME_COL not in period_df.columns or period_df[REGIME_COL].isna().any():
+            continue
+
+        # 1. Look up the true active regime state for this week
+        predicted_regime = int(period_df[REGIME_COL].iloc[0]) 
         
         # 2. Extract real point-in-time Stocktwits crowd signals
         real_features = period_df[['Argument_Similarity', 'Sentiment_Variance']]
         
-        # 3. Pull actual returns realized by these stocks over the upcoming week
-        forward_returns = period_df['Forward_Return'].values 
+        # 3. Pull actual returns realized by these assets over the UPCOMING week
+        # We look up the date row inside master_df for the next sequential rebalance step
+        next_date = rebalance_dates[rebalance_dates.get_loc(date) + 1] if date != rebalance_dates[-1] else None
         
-        # =====================================================================
+        if next_date is not None:
+            next_period_df = master_df[master_df['Date'] == next_date].set_index('Ticker').reindex(tickers)
+            # Ensure no missing return tokens are passed into portfolio linear combination
+            if next_period_df['log_ret'].isna().any():
+                continue
+            forward_returns = next_period_df['log_ret'].values
+        else:
+            forward_returns = period_df['log_ret'].values # Fallback for terminal calculation
         
         try:
             # A. Load the pre-compiled posterior trace asset for the active regime
@@ -106,12 +133,12 @@ def run_rolling_backtest():
             print(f"Processed {date_str} | Regime: {predicted_regime} | Net Return: {net_p_return:.4f}")
             
         except FileNotFoundError:
-            print(f"❌ Missing trace file for Regime {predicted_regime}. Run training loop first.")
+            print(f"Missing trace file for Regime {predicted_regime}. Run training loop first.")
             return
 
     # 3. Compile and summarize Performance Metrics
     if not portfolio_records:
-        print("❌ Backtest finished with no records generated.")
+        print("Backtest finished with no records generated. Verify date-matching configurations.")
         return
         
     df_results = pd.DataFrame(portfolio_records)
