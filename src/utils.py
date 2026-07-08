@@ -4,7 +4,9 @@ import ast
 import pandas as pd
 import numpy as np
 import pymc as pm
+import arviz as az
 import yfinance as yf
+from scipy.optimize import minimize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from hmmlearn.hmm import GaussianHMM
@@ -300,3 +302,61 @@ def fit_hierarchical_bayes(df_universe, regime_id, draws=2000, tune=1000):
         )
         
     return idata, ticker_names
+
+def load_saved_posterior(base_dir, regime_id):
+    """Loads the serialized NetCDF inference data for a specific regime."""
+    trace_path = os.path.join(base_dir, "data", f"regime_{regime_id}_posterior.nc")
+    if not os.path.exists(trace_path):
+        raise FileNotFoundError(f"Posterior trace asset missing: {trace_path}")
+    return az.from_netcdf(trace_path)
+
+def generate_bayesian_inputs(idata, current_features, asset_names):
+    """
+    Samples the posteriors conditioned on current NLP features to build 
+    the expected return vector (mu) and the covariance matrix (Sigma).
+    """
+    posterior = idata.posterior
+    n_assets = len(asset_names)
+    
+    # Containers for simulated forward returns
+    simulated_returns = []
+    
+    for idx, asset in enumerate(asset_names):
+        # Flatten chains and draws to get the full posterior distribution
+        alphas = posterior['alpha'].values[..., idx].flatten()
+        beta_sims = posterior['beta_sim'].values[..., idx].flatten()
+        beta_vars = posterior['beta_var'].values[..., idx].flatten()
+        
+        # Pull current feature values for this specific asset
+        feat_sim = current_features.loc[asset, 'Argument_Similarity']
+        feat_var = current_features.loc[asset, 'Sentiment_Variance']
+        
+        # Conditioned Expected Return Distribution: μ = α + β1*Sim + β2*Var
+        mu_conditioned = alphas + (beta_sims * feat_sim) + (beta_vars * feat_var)
+        simulated_returns.append(mu_conditioned)
+        
+    # Convert to array of shape (n_assets, n_samples)
+    sim_returns_matrix = np.array(simulated_returns)
+    
+    # Calculate Expected Return Vector (Mean of posteriors)
+    mu_bayes = np.mean(sim_returns_matrix, axis=1)
+    
+    # Calculate Empirical Covariance Matrix directly from posterior paths
+    sigma_bayes = np.cov(sim_returns_matrix)
+    
+    return mu_bayes, sigma_bayes
+
+def optimize_portfolio(mu, sigma):
+    """Executes a standard Max Sharpe Ratio optimization."""
+    n_assets = len(mu)
+    init_weights = np.array([1 / n_assets] * n_assets)
+    bounds = tuple((0, 1) for _ in range(n_assets))  # Long-only constraint
+    constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1})  # Fully invested
+    
+    def negative_sharpe(weights):
+        p_ret = np.dot(weights, mu)
+        p_vol = np.sqrt(np.dot(weights.T, np.dot(sigma, weights)))
+        return -p_ret / (p_vol + 1e-8)  # Minimize negative Sharpe
+        
+    res = minimize(negative_sharpe, init_weights, method='SLSQP', bounds=bounds, constraints=constraints)
+    return res.x

@@ -8,6 +8,10 @@ if __name__ == "__main__":
     BASE_DIR = os.path.dirname(SCRIPT_DIR)
     PROCESSED_DIR = os.path.join(BASE_DIR, "data", "processed")
     
+    # Target directory for trace persistence
+    DATA_OUTPUT_DIR = os.path.join(BASE_DIR, "data")
+    os.makedirs(DATA_OUTPUT_DIR, exist_ok=True)
+    
     TARGET_UNIVERSE = ["TSLA", "AAPL", "AMZN", "NVDA"]
     
     # 1. Compile dataset
@@ -25,7 +29,7 @@ if __name__ == "__main__":
         idata, assets = fit_hierarchical_bayes(df_universe, regime_id=regime)
         regime_posteriors[regime] = idata
         
-        # --- 3. Run Quality and Convergence Diagnostics ---
+        # 3. Run Quality and Convergence Diagnostics ---
         summary = az.summary(idata, var_names=['beta_sim', 'beta_var'])
         
         # Version-agnostic column slicing filter for ArviZ HDI naming variations
@@ -41,9 +45,15 @@ if __name__ == "__main__":
         print(f"\nMax Gelman-Rubin (R-hat) Score: {max_rhat:.4f}")
         
         if max_rhat > 1.05:
-            print("⚠️ WARNING: MCMC chains haven't fully mixed. Consider expanding tuning bounds.")
+            print("WARNING: MCMC chains haven't fully mixed. Consider expanding tuning bounds.")
         else:
-            print("✅ SUCCESS: MCMC chains successfully converged without structural leakage.")
+            print("SUCCESS: MCMC chains successfully converged without structural leakage.")
+            
+        # Write Posterior Trace Asset directly to disk
+        output_file_path = os.path.join(DATA_OUTPUT_DIR, f"regime_{regime}_posterior.nc")
+        print(f"[SERIALIZE] Preserving trace context to {output_file_path}...")
+        idata.to_netcdf(output_file_path)
+        print(f"NetCDF Asset Saved Successfully for Regime {regime}.")
             
     print("\n" + "="*75)
     print("BAYESIAN REGIME PARAMETER CORES COMPILED FOR PORTFOLIO ENGINE GENERATION")
