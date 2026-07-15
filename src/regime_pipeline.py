@@ -12,7 +12,7 @@ if __name__ == "__main__":
     # Anchor directly to the verified processed absolute directory layout
     PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
     
-    # The 4 fully validated, truncated tickers matching your 545-row panels
+    # The 4 fully validated universe tickers
     VALIDATED_UNIVERSE = ["TSLA", "AAPL", "AMZN", "NVDA"]
     
     print("="*70)
@@ -26,10 +26,10 @@ if __name__ == "__main__":
         print(f"\nProcessing Regime Space for Matrix Flux: {ticker}")
         print("-" * 50)
         
-        # Build paths dynamically based on your file naming structure
+        # Prioritize matching the exact [TICKER].csv structure outputted by S3 pipeline
         potential_files = [
-            f"{ticker}_processed_panel.csv",
-            f"{ticker}.csv"
+            f"{ticker}.csv",
+            f"{ticker}_processed_panel.csv"
         ]
         
         data_path = None
@@ -48,12 +48,13 @@ if __name__ == "__main__":
             df_feat = generate_regime_features(data_path)
             
             # 2. Gaussian HMM State Decoding Engine (2-state system: Low vs High Volatility)
+            # Fits HMM over returns/spreads with multistart seed search for global convergence
             hmm_model, df_regimes = fit_market_hmm(df_feat, n_regimes=2)
             
             # Save the trained model instance in memory
             fitted_models[ticker] = hmm_model
             
-            # 3. Save the enriched panel directly back over the target file or an explicit copy
+            # 3. Save the enriched panel directly as a downstream input for the Bayesian pipeline
             output_destination = os.path.join(PROCESSED_DATA_DIR, f"{ticker}_with_regimes.csv")
             df_regimes.to_csv(output_destination)
             

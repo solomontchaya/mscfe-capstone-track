@@ -27,6 +27,112 @@ def extract_sentiment_score(entities_str):
         pass
     return np.nan
 
+def process_s3_sentiment_pipeline(output_csv_path, target_ticker, start_date, end_date):
+    """
+    Directly streams pre-computed sentiment metadata from the NYU S3 bucket,
+    aggregates daily sentiment metrics, and aligns them with Yahoo Finance pricing.
+    
+    This replaces the heavy text-parsing pipeline while keeping the output schema 
+    identical to keep downstream Bayesian models happy.
+    """
+    CSV_URL = "s3://stocktwits-nyu/dataset/v1/data/csv"
+    storage_opts = {
+        "anon": True,
+        "client_kwargs": {"region_name": "us-west-2"}
+    }
+
+    print(f"=== [1/3] Streaming S3 Sentiment Index for: {target_ticker} ===")
+    sentiment_file = f"{CSV_URL}/sentiments/sentiment_00.csv"
+
+    # Stream the lightweight sentiment metadata
+    df_sent = pd.read_csv(
+        sentiment_file,
+        storage_options=storage_opts,
+        dtype={"sentiment": "object", "message_id": "object"}
+    )
+
+    # Quick cleanup of empty symbol columns
+    df_sent = df_sent.dropna(subset=['symbol_list'])
+    df_sent = df_sent[df_sent['symbol_list'] != '[]']
+
+    # Fast ticker matching
+    def ticker_match(symbol_str):
+        try:
+            return target_ticker in ast.literal_eval(symbol_str)
+        except Exception:
+            return False
+
+    df_sent['is_target'] = df_sent['symbol_list'].apply(ticker_match)
+    df_target = df_sent[df_sent['is_target'] == True].copy()
+
+    if df_target.empty:
+        print(f"Aborted: No records found for {target_ticker} in S3 sentiment files.")
+        return
+
+    # Convert sentiment string to float (-1.0, 1.0, etc.)
+    df_target['sentiment_score'] = pd.to_numeric(df_target['sentiment'], errors='coerce')
+
+    # Convert temporal index and apply timeline filter bounds
+    df_target['timestamp'] = pd.to_datetime(df_target['created_at'], errors='coerce')
+    df_target = df_target.dropna(subset=['timestamp'])
+    df_target['date_only'] = df_target['timestamp'].dt.date
+
+    start_dt = pd.to_datetime(start_date).date()
+    end_dt = pd.to_datetime(end_date).date()
+    df_target = df_target[(df_target['date_only'] >= start_dt) & (df_target['date_only'] <= end_dt)]
+
+    # -------------------------------------------------------------------------
+    # STEP 2: Aggregate Daily Metrics (Preserving Downstream Variable Names)
+    # -------------------------------------------------------------------------
+    print("=== [2/3] Aggregating Daily Signals ===")
+    daily_aggregates = []
+
+    for current_date, group in df_target.groupby('date_only'):
+        valid_sentiments = group['sentiment_score'].dropna()
+        msg_count = len(group)
+
+        if msg_count < 3:
+            continue  # Keep statistical integrity of variance calculation
+
+        # Map mean sentiment to Argument_Similarity to preserve code compatibility
+        daily_sent_mean = np.mean(valid_sentiments) if len(valid_sentiments) > 0 else 0.0
+        daily_sent_var = np.var(valid_sentiments) if len(valid_sentiments) > 0 else 0.0
+
+        daily_aggregates.append({
+            'Date': pd.to_datetime(current_date),
+            'Argument_Similarity': daily_sent_mean,  # Directional sentiment proxy
+            'Sentiment_Variance': daily_sent_var,    # Consensus dispersion proxy
+            'Volume_Crowd': float(msg_count)
+        })
+
+    df_features = pd.DataFrame(daily_aggregates).set_index('Date').sort_index()
+    df_features_lagged = df_features.shift(1)
+
+    # -------------------------------------------------------------------------
+    # STEP 3: Download Yahoo Finance Prices and Merge
+    # -------------------------------------------------------------------------
+    print("=== [3/3] Pulling Market Data and Merging Final Panel ===")
+    yf_ticker = "META" if target_ticker == "FB" else target_ticker
+    extended_end = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    market_data = yf.download(yf_ticker, start=start_date, end=extended_end)
+
+    if isinstance(market_data.columns, pd.MultiIndex):
+        market_data.columns = market_data.columns.get_level_values(0)
+    market_data.index = pd.to_datetime(market_data.index)
+    market_data = market_data.loc[start_date:end_date]
+
+    # Clean merge with 1-day lagged signals (to prevent look-ahead bias)
+    final_panel = market_data[['Close', 'High', 'Low', 'Volume']].merge(
+        df_features_lagged, left_index=True, right_index=True, how='left'
+    )
+    final_panel['Argument_Similarity'] = final_panel['Argument_Similarity'].ffill().fillna(0.0)
+    final_panel['Sentiment_Variance'] = final_panel['Sentiment_Variance'].ffill().fillna(0.0)
+    final_panel['Volume_Crowd'] = final_panel['Volume_Crowd'].fillna(0.0)
+
+    # Save to dynamic dataset location
+    final_panel.to_csv(output_csv_path)
+    print(f"\n=== Run Completed! Clean panel saved to: {output_csv_path} (Shape: {final_panel.shape}) ===\n")
+
 def process_local_chunks(raw_data_dir, output_csv_path, ticker, start_date, end_date):
     print(f"Initializing localized processing loops for: {ticker}")
     search_path = os.path.join(raw_data_dir, "**/*.csv")

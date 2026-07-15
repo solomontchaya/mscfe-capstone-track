@@ -108,8 +108,11 @@ def run_rolling_backtest():
             # B. Conditional Bayesian aggregation of crowd forecasts
             mu_b, sigma_b = generate_bayesian_inputs(idata, real_features, tickers)
             
+            # SAFEGUARD: Flatten expected return vector to 1D array to match optimizer matrix-dot layout
+            mu_b_flat = mu_b.flatten()
+            
             # C. Optimize target portfolio allocation weights
-            new_weights = optimize_portfolio(mu_b, sigma_b)
+            new_weights = optimize_portfolio(mu_b_flat, sigma_b)
             
             # D. Apply Transaction Frictions & Turnover Penalties
             turnover = np.sum(np.abs(new_weights - current_weights))

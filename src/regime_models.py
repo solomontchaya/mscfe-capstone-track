@@ -15,7 +15,13 @@ if __name__ == "__main__":
     TARGET_UNIVERSE = ["TSLA", "AAPL", "AMZN", "NVDA"]
     
     # 1. Compile dataset
+    print(f"[PRE-FLIGHT] Checking processed files in {PROCESSED_DIR}...")
     df_universe = load_regime_data(PROCESSED_DIR, TARGET_UNIVERSE)
+    
+    print(f"[PRE-FLIGHT] Successfully compiled {len(df_universe)} combined rows across {len(TARGET_UNIVERSE)} assets.")
+    print("Row breakdown by asset:")
+    if 'Asset' in df_universe.columns:
+        print(df_universe['Asset'].value_counts())
     
     # Dictionary container to hold posteriors for downstream portfolio feeding
     regime_posteriors = {}
@@ -26,8 +32,16 @@ if __name__ == "__main__":
         print(f"COMPUTING HIERARCHICAL BAYES POSTERIORS FOR REGIME STATE: {regime}")
         print("="*75)
         
+        # Track sampling duration
+        import time
+        start_sampling = time.time()
+        
+        # Fit model
         idata, assets = fit_hierarchical_bayes(df_universe, regime_id=regime)
         regime_posteriors[regime] = idata
+        
+        sampling_duration = time.time() - start_sampling
+        print(f"Sampling for Regime {regime} finished in {sampling_duration/60:.2f} minutes.")
         
         # 3. Run Quality and Convergence Diagnostics ---
         summary = az.summary(idata, var_names=['beta_sim', 'beta_var'])
@@ -45,7 +59,7 @@ if __name__ == "__main__":
         print(f"\nMax Gelman-Rubin (R-hat) Score: {max_rhat:.4f}")
         
         if max_rhat > 1.05:
-            print("WARNING: MCMC chains haven't fully mixed. Consider expanding tuning bounds.")
+            print("WARNING: MCMC chains haven't fully mixed. Consider expanding tuning bounds or increasing samples.")
         else:
             print("SUCCESS: MCMC chains successfully converged without structural leakage.")
             
