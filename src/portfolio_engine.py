@@ -86,42 +86,19 @@ if __name__ == "__main__":
     
     tickers = ["AAPL", "AMD", "SPY", "TSLA"]
     
-<<<<<<< HEAD
-    # Setup out-of-sample data points for asset allocation
-    tickers = ["TSLA", "AAPL", "AMZN", "NVDA"]
-=======
->>>>>>> 8ab4591 (Backtest Update)
     mock_features = pd.DataFrame({
         'Sentiment_Mean': [0.65, 0.50, 0.55, 0.70],     
         'Sentiment_Variance': [2.1, 1.2, 1.5, 3.4]
     }, index=tickers)
     mock_features.index.name = 'ticker'
     
-<<<<<<< HEAD
     # Active Hidden Markov Model state detected for allocation (1 = High Volatility / Stressed)
     current_regime = 1 
-=======
-    current_regime = 1  # 0: Low-Vol Expansion, 1: High-Vol Stressed Bear
->>>>>>> 8ab4591 (Backtest Update)
     
     print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime}")
     try:
         # Load serialized posterior NetCDF trace
         idata = load_saved_posterior(BASE_DIR, current_regime)
-<<<<<<< HEAD
-        
-        # 1. Coordinate Alignment Hook
-        # Extract the coordinate labels directly from ArviZ to prevent column-index misalignments
-        if hasattr(idata, "posterior") and "Asset" in idata.posterior.coords:
-            trace_assets = list(idata.posterior.coords["Asset"].values)
-            # Reorder our incoming ticker features to match the exact index mapping of the sampler
-            mock_features = mock_features.reindex(trace_assets)
-            tickers = trace_assets
-            print(f"[ALIGN] Aligning feature matrix order with posterior coordinates: {tickers}")
-        
-        # 2. Extract conditioned inputs
-=======
->>>>>>> 8ab4591 (Backtest Update)
         mu_b, sigma_b = generate_bayesian_inputs(idata, mock_features, tickers)
         
         # SAFE-GUARD: Flatten ONLY the expected return vector mu_b to 1-D (shape: 4,)
@@ -136,7 +113,6 @@ if __name__ == "__main__":
         
         print("\n--- Conditional Bayesian Vectors Derived ---")
         for i, ticker in enumerate(tickers):
-<<<<<<< HEAD
             print(f"{ticker} -> Expected Return: {mu_b_flat[i]:.6f} | Marginal Variance (Uncertainty): {diag_uncertainty[i]:.6f}")
             
         # 3. Run allocation (Dynamic Mean-Variance / Kelly Optimization)
@@ -144,13 +120,11 @@ if __name__ == "__main__":
         optimal_weights = optimize_portfolio(mu_b_flat, sigma_b)
         
         print("\n=======================================================")
-=======
             print(f"{ticker} -> Expected Return: {mu_b[i]:.6f}")
             
         optimal_weights = optimize_portfolio(mu_b, sigma_b)
         
         print("\n=========================================================")
->>>>>>> 8ab4591 (Backtest Update)
         print("OPTIMAL ALLOCATION WEIGHTS (BAYESIAN REGIME CONDITIONED)")
         print("=========================================================")
         for ticker, weight in zip(tickers, optimal_weights):
@@ -162,12 +136,6 @@ if __name__ == "__main__":
         plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_chart_file)
         
     except FileNotFoundError as e:
-<<<<<<< HEAD
         print(f"Error: {e}")
         print("Hint: Please save your netCDF files in regime_models.py first.")
     
-=======
-        print(f"\n[ERROR]: Trace target file missing: {e}")
-    except ValueError as e:
-        print(f"\n[ERROR]: Dimensionality or index mismatch occurred inside optimization block: {e}")
->>>>>>> 8ab4591 (Backtest Update)

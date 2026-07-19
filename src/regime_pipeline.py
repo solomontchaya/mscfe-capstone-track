@@ -15,15 +15,8 @@ if __name__ == "__main__":
                         
     PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
     
-<<<<<<< HEAD
     # The 4 fully validated universe tickers
     VALIDATED_UNIVERSE = ["TSLA", "AAPL", "AMZN", "NVDA"]
-=======
-    # Analysis configuration bounds
-    START_DATE = "2014-01-01"
-    END_DATE = "2015-12-31" 
-    VALIDATED_UNIVERSE = ["AAPL", "AMD", "SPY", "TSLA"]
->>>>>>> 8ab4591 (Backtest Update)
     
     print("="*70)
     print("STARTING MULTI-ASSET HIDDEN MARKOV MODEL REGIME PIPELINE")
@@ -35,16 +28,11 @@ if __name__ == "__main__":
         print(f"\nProcessing Regime Space for Matrix Flux: {ticker}")
         print("-" * 50)
         
-<<<<<<< HEAD
         # Prioritize matching the exact [TICKER].csv structure outputted by S3 pipeline
         potential_files = [
             f"{ticker}.csv",
             f"{ticker}_processed_panel.csv"
         ]
-=======
-        panel_filename = f"{ticker}_processed_panel.csv"
-        panel_path = os.path.join(PROCESSED_DATA_DIR, panel_filename)
->>>>>>> 8ab4591 (Backtest Update)
         
         # Check and merge upstream files if missing
         if not os.path.exists(panel_path):
@@ -65,20 +53,12 @@ if __name__ == "__main__":
             # 1. Feature generation layer
             df_feat = generate_regime_features(panel_path)
             
-<<<<<<< HEAD
             # 2. Gaussian HMM State Decoding Engine (2-state system: Low vs High Volatility)
             # Fits HMM over returns/spreads with multistart seed search for global convergence
-=======
-            # 2. Gaussian HMM State Decoding Engine
->>>>>>> 8ab4591 (Backtest Update)
             hmm_model, df_regimes = fit_market_hmm(df_feat, n_regimes=2)
             fitted_models[ticker] = hmm_model
             
-<<<<<<< HEAD
             # 3. Save the enriched panel directly as a downstream input for the Bayesian pipeline
-=======
-            # 3. Save the enriched panel
->>>>>>> 8ab4591 (Backtest Update)
             output_destination = os.path.join(PROCESSED_DATA_DIR, f"{ticker}_with_regimes.csv")
             df_regimes.to_csv(output_destination)
             
