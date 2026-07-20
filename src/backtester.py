@@ -123,7 +123,7 @@ def run_rolling_backtest():
         predicted_regime = int(period_df[REGIME_COL].iloc[0]) 
         
         # 2. Extract real point-in-time Stocktwits crowd signals
-        real_features = period_df[['Argument_Similarity', 'Sentiment_Variance']]
+        real_features = period_df[['Sentiment_Mean', 'Sentiment_Variance']]
         
         # 3. Pull actual returns realized by these assets over the UPCOMING week
         if idx + 1 < len(aligned):
@@ -198,7 +198,7 @@ def run_rolling_backtest():
     ann_sharpe = (df_results['Net_Return'].mean() / (df_results['Net_Return'].std() + 1e-8)) * np.sqrt(52)
     
     print("\n" + "="*50)
-    print("SWING-TRADE STRATEGY PERFORMANCE REPORT (2020-2022)")
+    print(f"SWING-TRADE STRATEGY PERFORMANCE REPORT ({min_data_date.year}-{max_data_date.year})")
     print("="*50)
     print(f"Total Cumulative Return: {total_return * 100:.2f}%")
     print(f"Annualized Sharpe Ratio: {ann_sharpe:.4f}")
