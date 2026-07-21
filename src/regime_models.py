@@ -12,7 +12,7 @@ if __name__ == "__main__":
     DATA_OUTPUT_DIR = os.path.join(BASE_DIR, "data")
     os.makedirs(DATA_OUTPUT_DIR, exist_ok=True)
     
-    TARGET_UNIVERSE = ["TSLA", "AAPL", "AMZN", "NVDA"]
+    TARGET_UNIVERSE = ["AAPL", "AMD", "SPY", "TSLA"]
     
     # 1. Compile dataset
     print(f"[PRE-FLIGHT] Checking processed files in {PROCESSED_DIR}...")
