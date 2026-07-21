@@ -92,8 +92,7 @@ if __name__ == "__main__":
     }, index=tickers)
     mock_features.index.name = 'ticker'
     
-    # Active Hidden Markov Model state detected for allocation (1 = High Volatility / Stressed)
-    current_regime = 1 
+    current_regime = 1  # 0: Low-Vol Expansion, 1: High-Vol Stressed Bear
     
     print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime}")
     try:
@@ -113,13 +112,6 @@ if __name__ == "__main__":
         
         print("\n--- Conditional Bayesian Vectors Derived ---")
         for i, ticker in enumerate(tickers):
-            print(f"{ticker} -> Expected Return: {mu_b_flat[i]:.6f} | Marginal Variance (Uncertainty): {diag_uncertainty[i]:.6f}")
-            
-        # 3. Run allocation (Dynamic Mean-Variance / Kelly Optimization)
-        # Passing mu_b_flat (1D vector) and sigma_b (2D covariance matrix)
-        optimal_weights = optimize_portfolio(mu_b_flat, sigma_b)
-        
-        print("\n=======================================================")
             print(f"{ticker} -> Expected Return: {mu_b[i]:.6f}")
             
         optimal_weights = optimize_portfolio(mu_b, sigma_b)
@@ -136,6 +128,6 @@ if __name__ == "__main__":
         plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_chart_file)
         
     except FileNotFoundError as e:
-        print(f"Error: {e}")
-        print("Hint: Please save your netCDF files in regime_models.py first.")
-    
+        print(f"\n[ERROR]: Trace target file missing: {e}")
+    except ValueError as e:
+        print(f"\n[ERROR]: Dimensionality or index mismatch occurred inside optimization block: {e}")

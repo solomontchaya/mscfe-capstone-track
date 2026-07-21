@@ -1,6 +1,9 @@
 import os
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import seaborn as sns
 from portfolio_engine import load_saved_posterior, generate_bayesian_inputs, optimize_portfolio
 
 def load_historical_backtest_data(processed_dir, tickers):
@@ -37,6 +40,87 @@ def load_historical_backtest_data(processed_dir, tickers):
     master_df['Date'] = pd.to_datetime(master_df['Date']).dt.tz_localize(None).dt.normalize()
     
     return master_df
+
+def plot_backtest_results(df_results, tickers, output_path):
+    """
+    Renders a four-panel diagnostic dashboard summarizing backtest performance:
+    cumulative net returns with regime shading, drawdown, allocation weights
+    over time, and per-period turnover.
+    """
+    sns.set_theme(style="whitegrid")
+
+    # Expand the per-period weight vectors into individual ticker columns
+    weights_df = pd.DataFrame(
+        df_results['Weights'].tolist(),
+        index=df_results.index,
+        columns=tickers
+    )
+
+    cum_returns = (1 + df_results['Net_Return']).cumprod() - 1
+    running_max = (1 + cum_returns).cummax()
+    drawdown = (1 + cum_returns) / running_max - 1
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    ax1, ax2, ax3, ax4 = axes.flatten()
+
+    # --- Panel 1: Cumulative Net Return with Regime Shading ---
+    ax1.plot(cum_returns.index, cum_returns.values * 100, color='#1f77b4', linewidth=1.8)
+    ax1.axhline(0, color='grey', linewidth=0.8, linestyle='--')
+
+    # Shade background by active regime (contiguous blocks)
+    regime_colors = {0: '#a6d8a8', 1: '#f4a6a6'}
+    regime_labels_used = set()
+    dates = df_results.index.to_list()
+    regimes = df_results['Regime'].to_list()
+    seg_start = dates[0]
+    seg_regime = regimes[0]
+    for i in range(1, len(dates) + 1):
+        if i == len(dates) or regimes[i] != seg_regime:
+            seg_end = dates[i] if i < len(dates) else dates[-1]
+            label = f"Regime {seg_regime}" if seg_regime not in regime_labels_used else None
+            ax1.axvspan(seg_start, seg_end, color=regime_colors.get(seg_regime, '#dddddd'),
+                        alpha=0.25, label=label)
+            regime_labels_used.add(seg_regime)
+            if i < len(dates):
+                seg_start = dates[i]
+                seg_regime = regimes[i]
+
+    ax1.set_title("Cumulative Net Return by Regime", fontsize=12, weight='bold')
+    ax1.set_ylabel("Cumulative Return (%)")
+    ax1.legend(loc='upper left', frameon=True, fontsize=9)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    # --- Panel 2: Drawdown ---
+    ax2.fill_between(drawdown.index, drawdown.values * 100, 0, color='#d62728', alpha=0.5)
+    ax2.plot(drawdown.index, drawdown.values * 100, color='#d62728', linewidth=1.2)
+    ax2.set_title("Portfolio Drawdown", fontsize=12, weight='bold')
+    ax2.set_ylabel("Drawdown (%)")
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    # --- Panel 3: Allocation Weights Over Time (Stacked Area) ---
+    colors = sns.color_palette("muted", len(tickers))
+    ax3.stackplot(weights_df.index, [weights_df[t] * 100 for t in tickers],
+                  labels=tickers, colors=colors, alpha=0.85)
+    ax3.set_title("Portfolio Allocation Weights Over Time", fontsize=12, weight='bold')
+    ax3.set_ylabel("Weight (%)")
+    ax3.set_ylim(0, 100)
+    ax3.legend(loc='upper left', frameon=True, fontsize=9, ncol=len(tickers))
+    ax3.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    # --- Panel 4: Turnover per Rebalance ---
+    ax4.bar(df_results.index, df_results['Turnover'] * 100, width=4,
+            color='#9467bd', edgecolor='black', alpha=0.8)
+    ax4.set_title("Turnover per Rebalance", fontsize=12, weight='bold')
+    ax4.set_ylabel("Turnover (%)")
+    ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    for ax in (ax1, ax2, ax3, ax4):
+        ax.tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    print(f"[VISUAL] Backtest results dashboard exported to: {output_path}")
+    plt.close()
 
 def run_rolling_backtest():
     # 1. Structural Path mapping
@@ -204,6 +288,12 @@ def run_rolling_backtest():
     print(f"Annualized Sharpe Ratio: {ann_sharpe:.4f}")
     print(f"Average Weekly Turnover: {df_results['Turnover'].mean() * 100:.2f}%")
     print("="*50)
+
+    # 4. Render diagnostic visuals summarizing the backtest run
+    REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    chart_path = os.path.join(REPORTS_DIR, "backtest_results_dashboard.png")
+    plot_backtest_results(df_results, tickers, chart_path)
 
 if __name__ == "__main__":
     run_rolling_backtest()
