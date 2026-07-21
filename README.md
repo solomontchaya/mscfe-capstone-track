@@ -72,7 +72,8 @@ later stages.
 ├── reports/
 │   ├── regime_{n}_optimization.png
 │   └── backtest_results_dashboard.png
-└── README.md
+├── README.md
+└── requirements.txt
 ```
 
 `data/` and `reports/` are created automatically on first run — you don't
@@ -127,8 +128,8 @@ seaborn
 
 ```bash
 # Clone the repo
-git clone <your-repo-url>
-cd <your-repo-name>
+git clone https://github.com/solomontchaya/mscfe-capstone-track.git
+cd mscfe-capstone-track
 
 # Create and activate a virtual environment
 python -m venv env
