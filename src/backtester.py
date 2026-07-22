@@ -59,12 +59,16 @@ def plot_backtest_results(df_results, tickers, output_path):
     cum_returns = (1 + df_results['Net_Return']).cumprod() - 1
     running_max = (1 + cum_returns).cummax()
     drawdown = (1 + cum_returns) / running_max - 1
+    cum_benchmark = (1 + df_results['Benchmark_Return']).cumprod() - 1
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     ax1, ax2, ax3, ax4 = axes.flatten()
 
-    # --- Panel 1: Cumulative Net Return with Regime Shading ---
-    ax1.plot(cum_returns.index, cum_returns.values * 100, color='#1f77b4', linewidth=1.8)
+    # --- Panel 1: Cumulative Net Return vs. Equal-Weight Benchmark, with Regime Shading ---
+    ax1.plot(cum_returns.index, cum_returns.values * 100, color='#1f77b4',
+              linewidth=1.8, label='Strategy (Net)', zorder=3)
+    ax1.plot(cum_benchmark.index, cum_benchmark.values * 100, color='#555555',
+              linewidth=1.4, linestyle='--', label='Equal-Weight Benchmark', zorder=2)
     ax1.axhline(0, color='grey', linewidth=0.8, linestyle='--')
 
     # Shade background by active regime (contiguous blocks)
@@ -85,7 +89,7 @@ def plot_backtest_results(df_results, tickers, output_path):
                 seg_start = dates[i]
                 seg_regime = regimes[i]
 
-    ax1.set_title("Cumulative Net Return by Regime", fontsize=12, weight='bold')
+    ax1.set_title("Cumulative Net Return vs. Equal-Weight Benchmark", fontsize=12, weight='bold')
     ax1.set_ylabel("Cumulative Return (%)")
     ax1.legend(loc='upper left', frameon=True, fontsize=9)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
@@ -130,6 +134,14 @@ def run_rolling_backtest():
     
     # Defining target backtest assets (Aligned with the Bayesian Backtest Simulator)
     tickers = ["AAPL", "AMD", "SPY", "TSLA"]
+
+    # Turnover controls: with weak/noisy Bayesian mu estimates, an unconstrained
+    # Sharpe-maximizer can flip between concentrated corner solutions week to
+    # week. These two knobs bias the optimizer toward smoother reallocation.
+    # Set both to 0/None to fall back to the original unconstrained behavior.
+    TURNOVER_PENALTY = 0.05      # Soft L1 penalty (lambda) on |w_new - w_prev|
+    MAX_WEIGHT_CHANGE = 0.15     # Hard cap: no single asset's weight can move
+                                  # more than this per rebalance (None disables)
     
     # Load the real dataset into memory before looping, passing the target tickers dynamically
     try:
@@ -230,8 +242,14 @@ def run_rolling_backtest():
             # SAFEGUARD: Flatten expected return vector to 1D array to match optimizer matrix-dot layout
             mu_b_flat = mu_b.flatten()
             
-            # C. Optimize target portfolio allocation weights
-            new_weights = optimize_portfolio(mu_b_flat, sigma_b)
+            # C. Optimize target portfolio allocation weights, biased toward
+            #    the current allocation to curb noise-driven corner-flipping
+            new_weights = optimize_portfolio(
+                mu_b_flat, sigma_b,
+                prev_weights=current_weights,
+                turnover_penalty=TURNOVER_PENALTY,
+                max_weight_change=MAX_WEIGHT_CHANGE
+            )
             
             # D. Apply Transaction Frictions & Turnover Penalties
             turnover = np.sum(np.abs(new_weights - current_weights))
@@ -240,12 +258,20 @@ def run_rolling_backtest():
             # E. Calculate Net Portfolio Yield for this step
             raw_p_return = np.dot(new_weights, forward_returns)
             net_p_return = raw_p_return - tx_cost
-            
+
+            # F. Passive equal-weight buy-and-hold benchmark over the SAME
+            #    forward-return window, for a like-for-like comparison. No
+            #    transaction cost applied since the benchmark weights never
+            #    change (a static equal split has zero turnover by definition).
+            benchmark_weights = np.ones(len(tickers)) / len(tickers)
+            benchmark_return = np.dot(benchmark_weights, forward_returns)
+
             portfolio_records.append({
                 'Date': actual_date,
                 'Regime': predicted_regime,
                 'Raw_Return': raw_p_return,
                 'Net_Return': net_p_return,
+                'Benchmark_Return': benchmark_return,
                 'Turnover': turnover,
                 'Weights': new_weights
             })
@@ -280,13 +306,18 @@ def run_rolling_backtest():
     cum_returns = (1 + df_results['Net_Return']).cumprod() - 1
     total_return = cum_returns.iloc[-1]
     ann_sharpe = (df_results['Net_Return'].mean() / (df_results['Net_Return'].std() + 1e-8)) * np.sqrt(52)
-    
+
+    cum_benchmark = (1 + df_results['Benchmark_Return']).cumprod() - 1
+    benchmark_total_return = cum_benchmark.iloc[-1]
+    benchmark_sharpe = (df_results['Benchmark_Return'].mean() / (df_results['Benchmark_Return'].std() + 1e-8)) * np.sqrt(52)
+
     print("\n" + "="*50)
     print(f"SWING-TRADE STRATEGY PERFORMANCE REPORT ({min_data_date.year}-{max_data_date.year})")
     print("="*50)
-    print(f"Total Cumulative Return: {total_return * 100:.2f}%")
-    print(f"Annualized Sharpe Ratio: {ann_sharpe:.4f}")
-    print(f"Average Weekly Turnover: {df_results['Turnover'].mean() * 100:.2f}%")
+    print(f"{'Metric':<28}{'Strategy':>12}{'Equal-Wt Benchmark':>22}")
+    print(f"{'Total Cumulative Return':<28}{total_return*100:>11.2f}%{benchmark_total_return*100:>21.2f}%")
+    print(f"{'Annualized Sharpe Ratio':<28}{ann_sharpe:>12.4f}{benchmark_sharpe:>22.4f}")
+    print(f"{'Average Weekly Turnover':<28}{df_results['Turnover'].mean()*100:>11.2f}%{'—':>22}")
     print("="*50)
 
     # 4. Render diagnostic visuals summarizing the backtest run

@@ -449,26 +449,56 @@ def generate_bayesian_inputs(idata, df_features, tickers):
     
     return mu_bayesian, sigma_bayesian
 
-def optimize_portfolio(mu_b, sigma_b):
+def optimize_portfolio(mu_b, sigma_b, prev_weights=None, turnover_penalty=0.0, max_weight_change=None):
     """
     Executes a Markowitz Mean-Variance optimization to maximize the Sharpe Ratio
     under full long-only capital investment constraints.
+
+    Optional turnover controls (both default OFF, so existing callers that
+    only pass mu_b/sigma_b keep their original behavior):
+
+    - prev_weights: the portfolio's current allocation. Required for either
+      of the two controls below to take effect.
+    - turnover_penalty: a soft L1 penalty (lambda) subtracted from the
+      Sharpe objective, proportional to sum(|w_new - prev_weights|). Larger
+      values bias the optimizer toward staying closer to the current
+      allocation when expected-return estimates are noisy/near-zero,
+      instead of chasing the "least-bad" corner every period.
+    - max_weight_change: an optional hard cap (e.g. 0.15) on how much any
+      single asset's weight can move per rebalance. Prevents the
+      100%-into-one-asset flip that noisy, near-zero mu estimates can
+      otherwise trigger.
     """
     n_assets = len(mu_b)
-    initial_weights = np.ones(n_assets) / n_assets
+    initial_weights = np.array(prev_weights) if prev_weights is not None else np.ones(n_assets) / n_assets
+
     bounds = tuple((0.0, 1.0) for _ in range(n_assets))  # Long-only constraint
-    
+    if prev_weights is not None and max_weight_change is not None:
+        bounds = tuple(
+            (max(0.0, prev_weights[i] - max_weight_change),
+             min(1.0, prev_weights[i] + max_weight_change))
+            for i in range(n_assets)
+        )
+
     # Constraint equation: Sum of allocations must equal 100%
     constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
-    
-    # Objective: Minimize Negative Sharpe Ratio (assumes zero risk-free rate)
+
+    # Objective: Minimize Negative Sharpe Ratio (assumes zero risk-free rate),
+    # optionally penalized for deviating from the prior allocation.
     def negative_sharpe(weights):
         port_return = np.dot(weights, mu_b)
         port_volatility = np.sqrt(np.dot(weights.T, np.dot(sigma_b, weights)))
         if port_volatility < 1e-8:
-            return 0.0
-        return - (port_return / port_volatility)
-        
+            sharpe = 0.0
+        else:
+            sharpe = port_return / port_volatility
+
+        objective = -sharpe
+        if prev_weights is not None and turnover_penalty > 0.0:
+            turnover = np.sum(np.abs(weights - prev_weights))
+            objective += turnover_penalty * turnover
+        return objective
+
     result = minimize(
         negative_sharpe, 
         initial_weights, 
