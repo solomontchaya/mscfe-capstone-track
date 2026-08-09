@@ -17,7 +17,8 @@ if __name__ == "__main__":
     
     # Analysis configuration bounds
     START_DATE = "2014-01-01"
-    END_DATE = "2015-12-31" 
+    # END_DATE = "2015-12-31" 
+    END_DATE = "2022-03-01"
     VALIDATED_UNIVERSE = ["AAPL", "AMD", "SPY", "TSLA"]
     
     print("="*70)
