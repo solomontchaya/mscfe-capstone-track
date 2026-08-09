@@ -252,9 +252,19 @@ def generate_regime_features(file_path):
     df = df.dropna(subset=['log_ret', 'hl_spread'])
     return df
 
-def fit_market_hmm(df_features, n_regimes=2, random_state=42):
+def fit_market_hmm(df_train, n_regimes=2, random_state=42, df_apply=None):
+    """
+    Fits a Gaussian HMM strictly on df_train, then decodes hidden states on
+    df_apply (defaults to df_train if not supplied). Splitting fit and apply
+    this way is what allows validation/test periods to receive regime labels
+    from a model that never saw those periods during EM fitting -- closing
+    the full-sample-hindsight gap that a single fit-and-decode-on-everything
+    call would otherwise introduce. Passing df_apply=None (or omitting it)
+    reproduces the original single-dataframe behavior exactly, so existing
+    callers that fit and decode on the same data are unaffected.
+    """
     feature_cols = ['log_ret', 'hl_spread']
-    X = df_features[feature_cols].values
+    X_train = df_train[feature_cols].values
     best_likelihood = -np.inf
     best_model = None
     
@@ -272,9 +282,9 @@ def fit_market_hmm(df_features, n_regimes=2, random_state=42):
             # Silence the non-converging seed alerts to clean up standard error logs
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=ConvergenceWarning)
-                model.fit(X)
+                model.fit(X_train)
                 
-            current_score = model.score(X)
+            current_score = model.score(X_train)
             if model.transmat_[1, 0] > 0.80 or model.transmat_[0, 1] > 0.80:
                 continue
             if current_score > best_likelihood:
@@ -287,10 +297,16 @@ def fit_market_hmm(df_features, n_regimes=2, random_state=42):
         best_model = GaussianHMM(n_components=n_regimes, covariance_type="full", n_iter=1000, random_state=random_state, tol=1e-4)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
-            best_model.fit(X)
+            best_model.fit(X_train)
 
-    hidden_states = best_model.predict(X)
-    post_probs = best_model.predict_proba(X)
+    # Decode on df_apply (the full/validation/test series) using the
+    # train-only-fitted model -- this is the step that must never re-fit.
+    if df_apply is None:
+        df_apply = df_train
+    X_apply = df_apply[feature_cols].values
+
+    hidden_states = best_model.predict(X_apply)
+    post_probs = best_model.predict_proba(X_apply)
     
     state_volatilities = [best_model.covars_[i][0, 0] for i in range(n_regimes)]
     low_vol_state_idx = np.argmin(state_volatilities)
@@ -299,7 +315,7 @@ def fit_market_hmm(df_features, n_regimes=2, random_state=42):
         hidden_states = 1 - hidden_states
         post_probs = post_probs[:, [1, 0]]
         
-    df_out = df_features.copy()
+    df_out = df_apply.copy()
     df_out['Prob_Regime_0'] = post_probs[:, 0]
     df_out['Prob_Regime_1'] = post_probs[:, 1]
     df_out['Hidden_State'] = hidden_states

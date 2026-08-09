@@ -13,10 +13,21 @@ if __name__ == "__main__":
     os.makedirs(DATA_OUTPUT_DIR, exist_ok=True)
     
     TARGET_UNIVERSE = ["AAPL", "AMD", "SPY", "TSLA"]
-    
+
+    # Must match regime_pipeline.py's TRAIN_END exactly -- the regime labels
+    # in the loaded CSVs were decoded across the full series, but the
+    # Bayesian posteriors must only ever see rows up to this date, or the
+    # coefficients would carry validation/test hindsight.
+    TRAIN_END = "2019-12-31"
+
     # 1. Compile dataset
     print(f"[PRE-FLIGHT] Checking processed files in {PROCESSED_DIR}...")
-    df_universe = load_regime_data(PROCESSED_DIR, TARGET_UNIVERSE)
+    df_universe_full = load_regime_data(PROCESSED_DIR, TARGET_UNIVERSE)
+
+    df_universe = df_universe_full[df_universe_full.index <= TRAIN_END].copy()
+    print(f"[PRE-FLIGHT] Loaded {len(df_universe_full)} total rows across "
+          f"{len(TARGET_UNIVERSE)} assets; restricting to {len(df_universe)} "
+          f"train-only rows through {TRAIN_END} for posterior fitting.")
     
     print(f"[PRE-FLIGHT] Successfully compiled {len(df_universe)} combined rows across {len(TARGET_UNIVERSE)} assets.")
     print("Row breakdown by asset:")

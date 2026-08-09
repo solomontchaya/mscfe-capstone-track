@@ -17,9 +17,23 @@ if __name__ == "__main__":
     
     # Analysis configuration bounds
     START_DATE = "2014-01-01"
-    # END_DATE = "2015-12-31" 
     END_DATE = "2022-03-01"
     VALIDATED_UNIVERSE = ["AAPL", "AMD", "SPY", "TSLA"]
+
+    # --- Train / Validation / Test split boundaries -----------------------
+    # The HMM is fit ONLY on data up to TRAIN_END. Regime labels for the
+    # validation and test windows are then decoded (not re-fit) using that
+    # train-only model, so no regime boundary anywhere in validation/test
+    # was chosen with hindsight of data past TRAIN_END. These three
+    # boundaries must stay in sync with the matching constants in
+    # regime_models.py and backtester.py -- see methodology_and_results.md
+    # for the full split table and rationale.
+    TRAIN_END = "2019-12-31"          # HMM + Bayesian fitting window ends here
+    VALIDATION_START = "2020-01-15"   # ~2-week embargo after TRAIN_END
+    VALIDATION_END = "2020-12-31"
+    TEST_START = "2021-01-15"         # ~2-week embargo after VALIDATION_END
+    TEST_END = END_DATE
+    # ------------------------------------------------------------------------
     
     print("="*70)
     print("STARTING MULTI-ASSET HIDDEN MARKOV MODEL REGIME PIPELINE")
@@ -52,9 +66,21 @@ if __name__ == "__main__":
         try:
             # 1. Feature generation layer
             df_feat = generate_regime_features(panel_path)
-            
-            # 2. Gaussian HMM State Decoding Engine
-            hmm_model, df_regimes = fit_market_hmm(df_feat, n_regimes=2)
+
+            # 1.1 Train-only slice for HMM fitting. Everything after
+            #     TRAIN_END (validation + test) is decoded using this
+            #     model's .predict()/.predict_proba(), never used to fit it.
+            df_feat_train = df_feat[df_feat.index <= TRAIN_END]
+            if len(df_feat_train) < 100:
+                print(f"Skipping {ticker}: train-window slice has only "
+                      f"{len(df_feat_train)} rows (<100), too little data "
+                      f"to fit an HMM before TRAIN_END={TRAIN_END}.")
+                continue
+
+            # 2. Gaussian HMM State Decoding Engine -- fit on train, apply to full
+            hmm_model, df_regimes = fit_market_hmm(
+                df_feat_train, n_regimes=2, df_apply=df_feat
+            )
             fitted_models[ticker] = hmm_model
             
             # 3. Save the enriched panel
@@ -63,9 +89,11 @@ if __name__ == "__main__":
             
             # 4. Clean diagnostic logging
             print(f"Success! Enriched regime tensor saved to: {output_destination}")
-            print(f"Matrix Dimension Profile: {df_regimes.shape}")
+            print(f"Matrix Dimension Profile: {df_regimes.shape} "
+                  f"(fit on {len(df_feat_train)} train-only rows through {TRAIN_END}, "
+                  f"decoded across the full {len(df_feat)}-row series)")
             print(f"Decoded State Counts (0 = Low-Vol, 1 = High-Vol):\n{df_regimes['Hidden_State'].value_counts()}")
-            print("\nStationary State Transition Probability Matrix:")
+            print("\nStationary State Transition Probability Matrix (train-only fit):")
             print(np.round(hmm_model.transmat_, 4))
             
         except Exception as e:
