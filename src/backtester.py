@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
+from scipy import stats
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 from portfolio_engine import load_saved_posterior, generate_bayesian_inputs, optimize_portfolio
 
@@ -339,6 +340,48 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
         print("-"*50)
     else:
         print(f"\n[{segment_label}] Skipped F1 scoring: insufficient class variation in realized returns.")
+
+    # Statistical significance of Strategy vs. Benchmark: with only ~50-60
+    # weekly observations per segment, a Sharpe/return gap that *looks*
+    # better can easily be noise. This tests whether the paired weekly
+    # excess return (Net_Return - Benchmark_Return) is distinguishable
+    # from zero -- a one-sample t-test (parametric) plus a bootstrap CI
+    # on the mean (fewer distributional assumptions, more trustworthy at
+    # this sample size) reported side by side.
+    excess_return = df_results['Net_Return'] - df_results['Benchmark_Return']
+    n_obs = len(excess_return)
+
+    t_stat, p_value = stats.ttest_1samp(excess_return, popmean=0.0)
+
+    n_bootstrap = 5000
+    rng = np.random.default_rng(seed=42)
+    boot_means = np.array([
+        rng.choice(excess_return.values, size=n_obs, replace=True).mean()
+        for _ in range(n_bootstrap)
+    ])
+    ci_low, ci_high = np.percentile(boot_means, [2.5, 97.5])
+
+    mean_excess = excess_return.mean()
+    is_significant = p_value < 0.05
+    ci_excludes_zero = (ci_low > 0) or (ci_high < 0)
+
+    print(f"\nSTATISTICAL SIGNIFICANCE — {segment_label.upper()} (Strategy vs. Benchmark)")
+    print("-"*50)
+    print(f"Observations (weekly periods):  {n_obs}")
+    print(f"Mean weekly excess return:      {mean_excess*100:.4f}%")
+    print(f"t-statistic:                    {t_stat:.4f}")
+    print(f"p-value (two-sided):            {p_value:.4f}")
+    print(f"95% bootstrap CI on mean:       [{ci_low*100:.4f}%, {ci_high*100:.4f}%]")
+    if is_significant and ci_excludes_zero:
+        verdict = "Excess return is statistically distinguishable from zero at the 5% level."
+    elif not is_significant and not ci_excludes_zero:
+        verdict = ("Excess return is NOT statistically distinguishable from zero -- "
+                   "the observed gap vs. the benchmark could plausibly be noise at this sample size.")
+    else:
+        verdict = ("t-test and bootstrap CI disagree on significance -- treat this "
+                   "segment's result as inconclusive rather than picking whichever supports the narrative.")
+    print(f"Verdict: {verdict}")
+    print("-"*50)
 
     chart_path = os.path.join(reports_dir, f"backtest_results_dashboard_{segment_label.lower()}.png")
     plot_backtest_results(df_results, tickers, chart_path, title_suffix=f" — {segment_label}")
