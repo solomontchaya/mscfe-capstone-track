@@ -1,4 +1,6 @@
+# portfolio_engine.py
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -78,6 +80,18 @@ def plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_path
     plt.close()
 
 if __name__ == "__main__":
+    # --sentiment-column=Sentiment_Extremized loads the ablation posterior
+    # trained on the skill-weighted + ANOVA-extremized signal instead of the
+    # default naive Sentiment_Mean. Must match whatever flag value was used
+    # when regime_models.py produced the trace you want to load here --
+    # load_saved_posterior() derives the filename suffix from this same
+    # string, so a mismatch here means "file not found" rather than a wrong
+    # answer, which is the safer failure mode.
+    SENTIMENT_COLUMN = "Sentiment_Mean"
+    for arg in sys.argv:
+        if arg.startswith("--sentiment-column="):
+            SENTIMENT_COLUMN = arg.split("=", 1)[1]
+
     # Structural project root directory mapping
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -87,18 +101,19 @@ if __name__ == "__main__":
     tickers = ["AAPL", "AMD", "SPY", "TSLA"]
     
     mock_features = pd.DataFrame({
-        'Sentiment_Mean': [0.65, 0.50, 0.55, 0.70],     
+        SENTIMENT_COLUMN: [0.65, 0.50, 0.55, 0.70],
         'Sentiment_Variance': [2.1, 1.2, 1.5, 3.4]
     }, index=tickers)
     mock_features.index.name = 'ticker'
     
     current_regime = 1  # 0: Low-Vol Expansion, 1: High-Vol Stressed Bear
     
-    print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime}")
+    print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime} "
+          f"(sentiment_column={SENTIMENT_COLUMN})")
     try:
-        # Load serialized posterior NetCDF trace
-        idata = load_saved_posterior(BASE_DIR, current_regime)
-        mu_b, sigma_b = generate_bayesian_inputs(idata, mock_features, tickers)
+        # Load serialized posterior NetCDF trace for the requested ablation run
+        idata = load_saved_posterior(BASE_DIR, current_regime, sentiment_column=SENTIMENT_COLUMN)
+        mu_b, sigma_b = generate_bayesian_inputs(idata, mock_features, tickers, sentiment_column=SENTIMENT_COLUMN)
         
         # SAFE-GUARD: Flatten ONLY the expected return vector mu_b to 1-D (shape: 4,)
         # Keep sigma_b as a 2-D covariance matrix (shape: 4x4)
@@ -117,17 +132,22 @@ if __name__ == "__main__":
         optimal_weights = optimize_portfolio(mu_b, sigma_b)
         
         print("\n=========================================================")
-        print("OPTIMAL ALLOCATION WEIGHTS (BAYESIAN REGIME CONDITIONED)")
+        print(f"OPTIMAL ALLOCATION WEIGHTS (BAYESIAN REGIME CONDITIONED, sentiment_column={SENTIMENT_COLUMN})")
         print("=========================================================")
         for ticker, weight in zip(tickers, optimal_weights):
             print(f"{ticker}: {weight * 100:.2f}%")
         print("=========================================================")
         
-        # Trigger explicit chart building pipelines
-        output_chart_file = os.path.join(REPORTS_DIR, f"regime_{current_regime}_optimization.png")
+        # Trigger explicit chart building pipelines. Suffix the filename so a
+        # Sentiment_Extremized run doesn't silently overwrite the
+        # Sentiment_Mean chart for the same regime.
+        chart_suffix = "" if SENTIMENT_COLUMN == "Sentiment_Mean" else f"_{SENTIMENT_COLUMN.lower()}"
+        output_chart_file = os.path.join(REPORTS_DIR, f"regime_{current_regime}_optimization{chart_suffix}.png")
         plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_chart_file)
         
     except FileNotFoundError as e:
         print(f"\n[ERROR]: Trace target file missing: {e}")
     except ValueError as e:
         print(f"\n[ERROR]: Dimensionality or index mismatch occurred inside optimization block: {e}")
+    except KeyError as e:
+        print(f"\n[ERROR]: Feature/column mismatch occurred inside Bayesian input generation: {e}")

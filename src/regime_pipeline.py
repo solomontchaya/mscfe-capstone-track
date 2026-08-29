@@ -1,7 +1,8 @@
+# regime_pipeline.py
 import os
 import pandas as pd
 import numpy as np
-from utils import fit_market_hmm, generate_regime_features, process_local_chunks
+from utils import fit_market_hmm, generate_regime_features, process_local_chunks, merge_skill_extremized_signal
 
 if __name__ == "__main__":
     # Suppress PyMC C++ compilation warnings globally
@@ -66,6 +67,16 @@ if __name__ == "__main__":
         try:
             # 1. Feature generation layer
             df_feat = generate_regime_features(panel_path)
+
+            # 1.05 Merge in the Stage 1.5 skill-weighted + ANOVA-extremized
+            #      signal (skill_weighting.py output) as a new
+            #      'Sentiment_Extremized' column, alongside the existing
+            #      naive 'Sentiment_Mean' -- lets fit_hierarchical_bayes()
+            #      run the ablation between the two without touching the
+            #      original column. No-ops (prints a warning, leaves the
+            #      panel unchanged) if skill_weighting.py hasn't been run
+            #      for this ticker yet.
+            df_feat = merge_skill_extremized_signal(df_feat, ticker, PROCESSED_DATA_DIR)
 
             # 1.1 Train-only slice for HMM fitting. Everything after
             #     TRAIN_END (validation + test) is decoded using this

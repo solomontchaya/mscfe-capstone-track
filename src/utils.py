@@ -1,3 +1,4 @@
+# utils.py
 import os
 import glob
 import pandas as pd
@@ -342,10 +343,46 @@ def load_regime_data(processed_dir, universe):
     df_all = pd.concat(combined_data).sort_index()
     return df_all
 
-def fit_hierarchical_bayes(df_panel, regime_id, draws=2000, tune=1500):
+def merge_skill_extremized_signal(df_panel, ticker, processed_dir):
+    """
+    Merges the Stage 1.5 output ({ticker}_skill_extremized.csv, produced by
+    skill_weighting.py) into df_panel as a new 'Sentiment_Extremized' column,
+    aligned on date and forward-filled the same way Sentiment_Mean/Variance
+    already are in process_local_chunks().
+
+    If the file doesn't exist (Stage 1.5 hasn't been run for this ticker),
+    prints a warning and returns df_panel unchanged rather than raising --
+    callers that don't need the extremized signal (e.g. the original
+    Sentiment_Mean pipeline) are unaffected either way.
+    """
+    skill_path = os.path.join(processed_dir, f"{ticker}_skill_extremized.csv")
+    if not os.path.exists(skill_path):
+        print(f"[{ticker}] No skill-extremized file found at {skill_path} -- "
+              f"'Sentiment_Extremized' column will not be available. "
+              f"Run skill_weighting.py first if you need it.")
+        return df_panel
+
+    df_skill = pd.read_csv(skill_path, parse_dates=["date"])
+    df_skill = df_skill.set_index("date")[["Sentiment_Extremized"]]
+    df_skill = df_skill[~df_skill.index.duplicated(keep="last")]
+
+    df_out = df_panel.copy()
+    df_out = df_out.join(df_skill, how="left")
+    df_out["Sentiment_Extremized"] = df_out["Sentiment_Extremized"].ffill().fillna(0.0)
+    return df_out
+
+
+def fit_hierarchical_bayes(df_panel, regime_id, draws=2000, tune=1500, sentiment_column="Sentiment_Mean"):
     """
     Executes an optimized Multi-Asset Non-Centered Hierarchical Bayesian Linear Regression
     isolated for a specific HMM Volatility Regime.
+
+    sentiment_column : which column to use as the directional sentiment
+        predictor -- 'Sentiment_Mean' (naive daily average, the original
+        pipeline) or 'Sentiment_Extremized' (skill-weighted + ANOVA-
+        extremized signal from skill_weighting.py), for a direct ablation
+        between the two. Sentiment_Variance is always used unchanged as
+        the dispersion predictor either way.
     """
     # Filter dataset for the specific operational regime slice
     df_regime = df_panel[df_panel['Hidden_State'] == regime_id].copy()
@@ -355,7 +392,14 @@ def fit_hierarchical_bayes(df_panel, regime_id, draws=2000, tune=1500):
     n_assets = len(universe)
     
     # Extract structural predictors (Standardized upstream for convergence safety)
-    X_mean = df_regime['Sentiment_Mean'].values
+    if sentiment_column not in df_regime.columns:
+        raise KeyError(
+            f"'{sentiment_column}' not found in the panel. Available columns: "
+            f"{df_regime.columns.tolist()}. If requesting 'Sentiment_Extremized', "
+            f"make sure regime_pipeline.py was run with skill-extremized merging "
+            f"enabled (see merge_skill_extremized_signal())."
+        )
+    X_mean = df_regime[sentiment_column].values
     X_var = df_regime['Sentiment_Variance'].values
     y = df_regime['log_ret'].values
     
@@ -404,19 +448,45 @@ def fit_hierarchical_bayes(df_panel, regime_id, draws=2000, tune=1500):
         
     return trace, universe
 
-def load_saved_posterior(base_dir, regime_id):
+def load_saved_posterior(base_dir, regime_id, sentiment_column="Sentiment_Mean"):
     """
     Ingests NetCDF traces containing full MCMC chains for a target regime.
+
+    sentiment_column : which regime_models.py ablation run to load.
+        'Sentiment_Mean' (the default/original pipeline) maps to no filename
+        suffix; anything else (e.g. 'Sentiment_Extremized') maps to
+        '_<sentiment_column.lower()>', matching OUTPUT_SUFFIX in
+        regime_models.py exactly. Passing a mismatched sentiment_column here
+        vs. what fit_hierarchical_bayes() was actually trained with will
+        silently load the wrong (or a missing) trace, so keep this in sync
+        with whatever --sentiment-column= flag produced the file you want.
     """
-    file_path = os.path.join(base_dir, "data", f"regime_{regime_id}_posterior.nc")
+    suffix = "" if sentiment_column == "Sentiment_Mean" else f"_{sentiment_column.lower()}"
+    file_path = os.path.join(base_dir, "data", f"regime_{regime_id}_posterior{suffix}.nc")
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"No NetCDF trace asset found at {file_path}")
+        raise FileNotFoundError(
+            f"No NetCDF trace asset found at {file_path}. If you requested "
+            f"sentiment_column='{sentiment_column}', make sure regime_models.py "
+            f"was run with the matching --sentiment-column= flag first."
+        )
     return az.from_netcdf(file_path)
 
-def generate_bayesian_inputs(idata, df_features, tickers):
+def generate_bayesian_inputs(idata, df_features, tickers, sentiment_column="Sentiment_Mean"):
     """
     Extracts posterior parameter arrays, applies feature matrices, 
     and outputs conditional return vectors and covariance structures.
+
+    sentiment_column : which column of df_features holds the directional
+        sentiment predictor to multiply against the posterior's beta_sim
+        coefficients. This MUST match whatever sentiment_column
+        fit_hierarchical_bayes() was trained with for the idata being
+        passed in -- e.g. if idata came from the Sentiment_Extremized
+        ablation run, pass sentiment_column='Sentiment_Extremized' here too,
+        or you'll be multiplying Sentiment_Extremized-fitted coefficients
+        against a naive Sentiment_Mean feature value (or vice versa), which
+        silently produces a meaningless mu_bayesian rather than raising.
+        Sentiment_Variance is always read from its own fixed column
+        regardless of this setting.
     """
     # Extract structural chain arrays from the posterior trace
     posterior = idata.posterior
@@ -439,13 +509,20 @@ def generate_bayesian_inputs(idata, df_features, tickers):
     
     n_assets = len(tickers)
     simulated_returns = np.zeros((n_samples, n_assets))
+
+    if sentiment_column not in df_features.columns:
+        raise KeyError(
+            f"'{sentiment_column}' not found in df_features. Available columns: "
+            f"{df_features.columns.tolist()}. This must match the sentiment_column "
+            f"that fit_hierarchical_bayes() was trained with for this idata."
+        )
     
     # Generate predictive return distributions
     for idx, ticker in enumerate(tickers):
         t_idx = asset_mapping[idx]
         
         # Pull asset features safely
-        x_mean = df_features.loc[ticker, 'Sentiment_Mean']
+        x_mean = df_features.loc[ticker, sentiment_column]
         x_var = df_features.loc[ticker, 'Sentiment_Variance']
         
         # Calculate expected returns incorporating residual idiosyncratic risk components
