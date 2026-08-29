@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -78,6 +79,16 @@ def plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_path
     plt.close()
 
 if __name__ == "__main__":
+    # --sentiment-column=Sentiment_Extremized loads the matching-suffixed
+    # posterior and reads that column from mock_features instead of
+    # Sentiment_Mean -- see backtester.py / regime_models.py for the same
+    # convention.
+    SENTIMENT_COLUMN = "Sentiment_Mean"
+    for arg in sys.argv:
+        if arg.startswith("--sentiment-column="):
+            SENTIMENT_COLUMN = arg.split("=", 1)[1]
+    OUTPUT_SUFFIX = "" if SENTIMENT_COLUMN == "Sentiment_Mean" else f"_{SENTIMENT_COLUMN.lower()}"
+
     # Structural project root directory mapping
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -86,19 +97,25 @@ if __name__ == "__main__":
     
     tickers = ["AAPL", "AMD", "SPY", "TSLA"]
     
+    # NOTE: these are illustrative mock values for a standalone single-period
+    # sanity check, not real data -- Sentiment_Extremized here is just a
+    # placeholder in the same [-1, 1]-ish range the real extremized signal
+    # occupies, not pulled from any actual skill_weighting.py output.
     mock_features = pd.DataFrame({
-        'Sentiment_Mean': [0.65, 0.50, 0.55, 0.70],     
+        'Sentiment_Mean': [0.65, 0.50, 0.55, 0.70],
+        'Sentiment_Extremized': [0.80, 0.10, 0.35, 0.90],
         'Sentiment_Variance': [2.1, 1.2, 1.5, 3.4]
     }, index=tickers)
     mock_features.index.name = 'ticker'
     
     current_regime = 1  # 0: Low-Vol Expansion, 1: High-Vol Stressed Bear
     
-    print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime}")
+    print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime} "
+          f"(sentiment_column={SENTIMENT_COLUMN})")
     try:
         # Load serialized posterior NetCDF trace
-        idata = load_saved_posterior(BASE_DIR, current_regime)
-        mu_b, sigma_b = generate_bayesian_inputs(idata, mock_features, tickers)
+        idata = load_saved_posterior(BASE_DIR, current_regime, suffix=OUTPUT_SUFFIX)
+        mu_b, sigma_b = generate_bayesian_inputs(idata, mock_features, tickers, sentiment_column=SENTIMENT_COLUMN)
         
         # SAFE-GUARD: Flatten ONLY the expected return vector mu_b to 1-D (shape: 4,)
         # Keep sigma_b as a 2-D covariance matrix (shape: 4x4)
@@ -124,7 +141,7 @@ if __name__ == "__main__":
         print("=========================================================")
         
         # Trigger explicit chart building pipelines
-        output_chart_file = os.path.join(REPORTS_DIR, f"regime_{current_regime}_optimization.png")
+        output_chart_file = os.path.join(REPORTS_DIR, f"regime_{current_regime}_optimization{OUTPUT_SUFFIX}.png")
         plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_chart_file)
         
     except FileNotFoundError as e:

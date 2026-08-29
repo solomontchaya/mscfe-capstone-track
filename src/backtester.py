@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -131,7 +132,8 @@ def plot_backtest_results(df_results, tickers, output_path, title_suffix=""):
 
 def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
                           segment_label, segment_start, segment_end,
-                          turnover_penalty, max_weight_change):
+                          turnover_penalty, max_weight_change,
+                          sentiment_column="Sentiment_Mean", output_suffix=""):
     """
     Runs the weekly walk-forward backtest restricted to a single date segment
     (e.g. 'Validation' or 'Test'). This is the same per-period mechanics as
@@ -143,6 +145,14 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     Portfolio weights reset to equal-weight at the start of each segment --
     each segment is evaluated independently rather than as one continuous
     portfolio path spanning the train/validation/test boundary.
+
+    sentiment_column / output_suffix : must be kept in sync with each other
+        and with whichever posterior regime_models.py produced --
+        output_suffix selects which regime_{n}_posterior{suffix}.nc file to
+        load (see load_saved_posterior), and sentiment_column selects which
+        panel column feeds the loaded posterior's coefficients (see
+        generate_bayesian_inputs). Mismatching the two silently combines
+        features and coefficients from two different models.
 
     Returns df_results (or None if the segment produced no records).
     """
@@ -189,7 +199,7 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     }
 
     print(f"\n[{segment_label}] Initializing backtest across {len(aligned)} aligned periods "
-          f"({segment_start} to {segment_end})...")
+          f"({segment_start} to {segment_end}, sentiment_column={sentiment_column})...")
 
     for idx, row in aligned.iterrows():
         actual_date = row['Actual_Date']
@@ -215,7 +225,7 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
             continue
 
         predicted_regime = int(period_df[REGIME_COL].iloc[0])
-        real_features = period_df[['Sentiment_Mean', 'Sentiment_Variance']]
+        real_features = period_df[[sentiment_column, 'Sentiment_Variance']]
 
         # Forward return lookup: use the NEXT SCHEDULED REBALANCE DATE within
         # this segment (matching the weekly holding period turnover costs are
@@ -239,8 +249,8 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
             forward_returns = period_df['log_ret'].values  # Fallback for terminal calculation
 
         try:
-            idata = load_saved_posterior(base_dir, predicted_regime)
-            mu_b, sigma_b = generate_bayesian_inputs(idata, real_features, tickers)
+            idata = load_saved_posterior(base_dir, predicted_regime, suffix=output_suffix)
+            mu_b, sigma_b = generate_bayesian_inputs(idata, real_features, tickers, sentiment_column=sentiment_column)
             mu_b_flat = mu_b.flatten()
 
             predicted_direction = (mu_b_flat > 0).astype(int)
@@ -306,7 +316,7 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     benchmark_sharpe = (df_results['Benchmark_Return'].mean() / (df_results['Benchmark_Return'].std() + 1e-8)) * np.sqrt(52)
 
     print("\n" + "="*50)
-    print(f"SWING-TRADE STRATEGY PERFORMANCE REPORT — {segment_label.upper()} ({segment_start} to {segment_end})")
+    print(f"SWING-TRADE STRATEGY PERFORMANCE REPORT — {segment_label.upper()} ({segment_start} to {segment_end}) [sentiment_column={sentiment_column}]")
     print("="*50)
     print(f"{'Metric':<28}{'Strategy':>12}{'Equal-Wt Benchmark':>22}")
     print(f"{'Total Cumulative Return':<28}{total_return*100:>11.2f}%{benchmark_total_return*100:>21.2f}%")
@@ -383,13 +393,25 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     print(f"Verdict: {verdict}")
     print("-"*50)
 
-    chart_path = os.path.join(reports_dir, f"backtest_results_dashboard_{segment_label.lower()}.png")
+    chart_path = os.path.join(reports_dir, f"backtest_results_dashboard_{segment_label.lower()}{output_suffix}.png")
     plot_backtest_results(df_results, tickers, chart_path, title_suffix=f" — {segment_label}")
 
     return df_results
 
 
 def run_rolling_backtest():
+    # --sentiment-column=Sentiment_Extremized runs the backtest using the
+    # skill-weighted + ANOVA-extremized + causally-lagged signal instead of
+    # the original naive Sentiment_Mean. Loads the matching-suffixed
+    # posterior (see regime_models.py's OUTPUT_SUFFIX) and writes dashboards
+    # under matching filenames, so neither run overwrites the other.
+    SENTIMENT_COLUMN = "Sentiment_Mean"
+    for arg in sys.argv:
+        if arg.startswith("--sentiment-column="):
+            SENTIMENT_COLUMN = arg.split("=", 1)[1]
+    OUTPUT_SUFFIX = "" if SENTIMENT_COLUMN == "Sentiment_Mean" else f"_{SENTIMENT_COLUMN.lower()}"
+    print(f"[PRE-FLIGHT] Backtest sentiment_column for this run: {SENTIMENT_COLUMN}")
+
     # 1. Structural Path mapping
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -442,7 +464,9 @@ def run_rolling_backtest():
         segment_start=VALIDATION_START,
         segment_end=VALIDATION_END,
         turnover_penalty=TURNOVER_PENALTY,
-        max_weight_change=MAX_WEIGHT_CHANGE
+        max_weight_change=MAX_WEIGHT_CHANGE,
+        sentiment_column=SENTIMENT_COLUMN,
+        output_suffix=OUTPUT_SUFFIX
     )
 
     # --- Test segment (held out; report once, do not re-tune afterward) -----
@@ -452,12 +476,15 @@ def run_rolling_backtest():
         segment_start=TEST_START,
         segment_end=TEST_END,
         turnover_penalty=TURNOVER_PENALTY,
-        max_weight_change=MAX_WEIGHT_CHANGE
+        max_weight_change=MAX_WEIGHT_CHANGE,
+        sentiment_column=SENTIMENT_COLUMN,
+        output_suffix=OUTPUT_SUFFIX
     )
 
     print("\n" + "="*50)
     print("RUN COMPLETE")
     print("="*50)
+    print("Sentiment column used:", SENTIMENT_COLUMN)
     print("Validation segment:", "OK" if validation_results is not None else "NO RECORDS")
     print("Test segment:      ", "OK" if test_results is not None else "NO RECORDS")
     print("Dashboards saved to:", REPORTS_DIR)
