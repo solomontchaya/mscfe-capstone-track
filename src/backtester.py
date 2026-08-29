@@ -1,4 +1,3 @@
-# backtester.py
 import os
 import sys
 import numpy as np
@@ -8,21 +7,12 @@ import matplotlib.dates as mdates
 import seaborn as sns
 from scipy import stats
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
-from utils import load_saved_posterior, generate_bayesian_inputs, optimize_portfolio
+from portfolio_engine import load_saved_posterior, generate_bayesian_inputs, optimize_portfolio
 
-def load_historical_backtest_data(processed_dir, tickers, sentiment_column="Sentiment_Mean"):
+def load_historical_backtest_data(processed_dir, tickers):
     """
     Dynamically loads and combines individual ticker CSVs containing regime alignments.
     Now accepts a dynamic 'tickers' list to prevent asset mismatch issues.
-
-    sentiment_column : if set to anything other than the default
-        'Sentiment_Mean' (e.g. 'Sentiment_Extremized'), asserts that column
-        is actually present in every loaded {ticker}_with_regimes.csv file.
-        That column only exists if regime_pipeline.py's
-        merge_skill_extremized_signal() step ran (i.e. skill_weighting.py's
-        Stage 1.5 output existed) before those CSVs were generated -- this
-        check turns a silent KeyError deep inside generate_bayesian_inputs()
-        later in the run into a clear, immediate error here instead.
     """
     print("[DATA] Ingesting and compiling per-ticker regime datasets...")
     
@@ -40,17 +30,6 @@ def load_historical_backtest_data(processed_dir, tickers, sentiment_column="Sent
             
         # Read individual asset frame
         df_ticker = pd.read_csv(file_path)
-
-        if sentiment_column not in df_ticker.columns:
-            raise KeyError(
-                f"'{sentiment_column}' not found in {file_path}. Available columns: "
-                f"{df_ticker.columns.tolist()}.\n"
-                f"If you requested sentiment_column='Sentiment_Extremized', make sure "
-                f"skill_weighting.py (Stage 1.5) was run for '{ticker}' AND "
-                f"regime_pipeline.py's merge_skill_extremized_signal() step ran "
-                f"BEFORE this {file_name} was generated -- otherwise the column "
-                f"was never merged into the panel in the first place."
-            )
         
         # Inject the Ticker identifier so the cross-sectional indexer can find it
         df_ticker['Ticker'] = ticker
@@ -154,7 +133,7 @@ def plot_backtest_results(df_results, tickers, output_path, title_suffix=""):
 def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
                           segment_label, segment_start, segment_end,
                           turnover_penalty, max_weight_change,
-                          sentiment_column="Sentiment_Mean"):
+                          sentiment_column="Sentiment_Mean", output_suffix=""):
     """
     Runs the weekly walk-forward backtest restricted to a single date segment
     (e.g. 'Validation' or 'Test'). This is the same per-period mechanics as
@@ -167,11 +146,13 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     each segment is evaluated independently rather than as one continuous
     portfolio path spanning the train/validation/test boundary.
 
-    sentiment_column : which directional sentiment feature/posterior
-        ablation to use ('Sentiment_Mean' or 'Sentiment_Extremized'). Must
-        match a posterior that regime_models.py actually produced (via its
-        own --sentiment-column= flag) and a column present in master_df
-        (see load_historical_backtest_data()'s sentiment_column check).
+    sentiment_column / output_suffix : must be kept in sync with each other
+        and with whichever posterior regime_models.py produced --
+        output_suffix selects which regime_{n}_posterior{suffix}.nc file to
+        load (see load_saved_posterior), and sentiment_column selects which
+        panel column feeds the loaded posterior's coefficients (see
+        generate_bayesian_inputs). Mismatching the two silently combines
+        features and coefficients from two different models.
 
     Returns df_results (or None if the segment produced no records).
     """
@@ -268,7 +249,7 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
             forward_returns = period_df['log_ret'].values  # Fallback for terminal calculation
 
         try:
-            idata = load_saved_posterior(base_dir, predicted_regime, sentiment_column=sentiment_column)
+            idata = load_saved_posterior(base_dir, predicted_regime, suffix=output_suffix)
             mu_b, sigma_b = generate_bayesian_inputs(idata, real_features, tickers, sentiment_column=sentiment_column)
             mu_b_flat = mu_b.flatten()
 
@@ -307,11 +288,7 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
             print(f"[{segment_label}] {date_str} | Regime: {predicted_regime} | Net Return: {net_p_return:.4f}")
 
         except FileNotFoundError:
-            print(f"Missing trace file for Regime {predicted_regime} (sentiment_column={sentiment_column}). "
-                  f"Run regime_models.py with the matching --sentiment-column= flag first.")
-            return None
-        except KeyError as e:
-            print(f"Feature/column mismatch on {date_str}: {e}")
+            print(f"Missing trace file for Regime {predicted_regime}. Run training loop first.")
             return None
         except Exception as e:
             skip_reasons['other_error'] += 1
@@ -339,8 +316,7 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     benchmark_sharpe = (df_results['Benchmark_Return'].mean() / (df_results['Benchmark_Return'].std() + 1e-8)) * np.sqrt(52)
 
     print("\n" + "="*50)
-    print(f"SWING-TRADE STRATEGY PERFORMANCE REPORT — {segment_label.upper()} ({segment_start} to {segment_end}) "
-          f"[sentiment_column={sentiment_column}]")
+    print(f"SWING-TRADE STRATEGY PERFORMANCE REPORT — {segment_label.upper()} ({segment_start} to {segment_end}) [sentiment_column={sentiment_column}]")
     print("="*50)
     print(f"{'Metric':<28}{'Strategy':>12}{'Equal-Wt Benchmark':>22}")
     print(f"{'Total Cumulative Return':<28}{total_return*100:>11.2f}%{benchmark_total_return*100:>21.2f}%")
@@ -417,27 +393,24 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
     print(f"Verdict: {verdict}")
     print("-"*50)
 
-    # Suffix the chart filename so a Sentiment_Extremized run never silently
-    # overwrites the Sentiment_Mean dashboard for the same segment -- same
-    # naming convention as OUTPUT_SUFFIX in regime_models.py.
-    chart_suffix = "" if sentiment_column == "Sentiment_Mean" else f"_{sentiment_column.lower()}"
-    chart_path = os.path.join(reports_dir, f"backtest_results_dashboard_{segment_label.lower()}{chart_suffix}.png")
-    plot_backtest_results(df_results, tickers, chart_path, title_suffix=f" — {segment_label} ({sentiment_column})")
+    chart_path = os.path.join(reports_dir, f"backtest_results_dashboard_{segment_label.lower()}{output_suffix}.png")
+    plot_backtest_results(df_results, tickers, chart_path, title_suffix=f" — {segment_label}")
 
     return df_results
 
 
 def run_rolling_backtest():
-    # --sentiment-column=Sentiment_Extremized runs the full validation+test
-    # backtest against the skill-weighted + ANOVA-extremized ablation
-    # posteriors instead of the default naive Sentiment_Mean ones. Must
-    # match a run that regime_models.py already completed (same flag) and
-    # a column present in the *_with_regimes.csv panels (same flag passed
-    # through regime_pipeline.py's upstream merge step).
+    # --sentiment-column=Sentiment_Extremized runs the backtest using the
+    # skill-weighted + ANOVA-extremized + causally-lagged signal instead of
+    # the original naive Sentiment_Mean. Loads the matching-suffixed
+    # posterior (see regime_models.py's OUTPUT_SUFFIX) and writes dashboards
+    # under matching filenames, so neither run overwrites the other.
     SENTIMENT_COLUMN = "Sentiment_Mean"
     for arg in sys.argv:
         if arg.startswith("--sentiment-column="):
             SENTIMENT_COLUMN = arg.split("=", 1)[1]
+    OUTPUT_SUFFIX = "" if SENTIMENT_COLUMN == "Sentiment_Mean" else f"_{SENTIMENT_COLUMN.lower()}"
+    print(f"[PRE-FLIGHT] Backtest sentiment_column for this run: {SENTIMENT_COLUMN}")
 
     # 1. Structural Path mapping
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -475,10 +448,8 @@ def run_rolling_backtest():
     MAX_WEIGHT_CHANGE = 0.15     # Hard cap: no single asset's weight can move
                                   # more than this per rebalance (None disables)
 
-    print(f"[PRE-FLIGHT] Backtest sentiment_column for this run: {SENTIMENT_COLUMN}")
-
     try:
-        master_df = load_historical_backtest_data(PROCESSED_DIR, tickers, sentiment_column=SENTIMENT_COLUMN)
+        master_df = load_historical_backtest_data(PROCESSED_DIR, tickers)
     except Exception as e:
         print(f"Data Load Error: {e}")
         return
@@ -494,7 +465,8 @@ def run_rolling_backtest():
         segment_end=VALIDATION_END,
         turnover_penalty=TURNOVER_PENALTY,
         max_weight_change=MAX_WEIGHT_CHANGE,
-        sentiment_column=SENTIMENT_COLUMN
+        sentiment_column=SENTIMENT_COLUMN,
+        output_suffix=OUTPUT_SUFFIX
     )
 
     # --- Test segment (held out; report once, do not re-tune afterward) -----
@@ -505,13 +477,14 @@ def run_rolling_backtest():
         segment_end=TEST_END,
         turnover_penalty=TURNOVER_PENALTY,
         max_weight_change=MAX_WEIGHT_CHANGE,
-        sentiment_column=SENTIMENT_COLUMN
+        sentiment_column=SENTIMENT_COLUMN,
+        output_suffix=OUTPUT_SUFFIX
     )
 
     print("\n" + "="*50)
     print("RUN COMPLETE")
     print("="*50)
-    print(f"Sentiment column used: {SENTIMENT_COLUMN}")
+    print("Sentiment column used:", SENTIMENT_COLUMN)
     print("Validation segment:", "OK" if validation_results is not None else "NO RECORDS")
     print("Test segment:      ", "OK" if test_results is not None else "NO RECORDS")
     print("Dashboards saved to:", REPORTS_DIR)
