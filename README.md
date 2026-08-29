@@ -1,5 +1,5 @@
+```markdown
 ## Assessing the Viability of Swing-Trade Strategies Using Bayesian Aggregation of Behavioural Crowd Forecasts With Continuous Fundamental Regimes
-
 
 Swing-trading strategy that combines **Hidden Markov Model regime detection**,
 **hierarchical Bayesian return modeling on crowd sentiment**, and
@@ -26,6 +26,7 @@ active at each rebalance date to drive portfolio construction.
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Outputs](#outputs)
+- [Results](#results)
 - [Methodology Notes](#methodology-notes)
 - [Limitations](#limitations)
 - [License](#license)
@@ -46,7 +47,7 @@ data_engine.py  ──▶  regime_pipeline.py  ──▶  regime_models.py  ─�
 | 2 | `regime_pipeline.py` | Builds lagged sentiment features + price features, fits a per-ticker Gaussian HMM to classify Low-Vol / High-Vol regimes | `data/processed/{TICKER}.csv`, Yahoo Finance | `data/processed/{TICKER}_with_regimes.csv` |
 | 3 | `regime_models.py` | Fits a hierarchical Bayesian regression (PyMC/NUTS) per regime, pooling statistical strength across tickers | `data/processed/{TICKER}_with_regimes.csv` (all tickers) | `data/regime_0_posterior.nc`, `data/regime_1_posterior.nc` |
 | 4 | `portfolio_engine.py` | Demonstrates a single-period optimal allocation for a given regime + feature snapshot; plots the efficient frontier | `data/regime_{n}_posterior.nc` | `reports/regime_{n}_optimization.png` |
-| 5 | `backtester.py` | Runs a weekly walk-forward simulation: detect active regime → generate Bayesian (μ, Σ) → optimize weights → apply turnover cost → realize forward return | `data/processed/{TICKER}_with_regimes.csv`, posteriors | Console performance report + `reports/backtest_results_dashboard.png` |
+| 5 | `backtester.py` | Runs a weekly walk-forward simulation: detect active regime → generate Bayesian (μ, Σ) → optimize weights → apply turnover cost → realize forward return | `data/processed/{TICKER}_with_regimes.csv`, posteriors | Console performance report + `reports/backtest_results_dashboard_{validation|test}.png` |
 
 Shared logic (feature engineering, HMM fitting, the PyMC model definition,
 and the Markowitz optimizer) lives in `utils.py` and is imported by the
@@ -71,7 +72,8 @@ later stages.
 │   └── regime_1_posterior.nc # Serialized MCMC trace — High-Volatility regime
 ├── reports/
 │   ├── regime_{n}_optimization.png
-│   └── backtest_results_dashboard.png
+│   ├── backtest_results_dashboard_validation.png
+│   └── backtest_results_dashboard_test.png
 ├── README.md
 └── requirements.txt
 ```
@@ -166,19 +168,8 @@ python src/portfolio_engine.py
 python src/backtester.py
 ```
 
-Step 5 prints a performance summary to the console:
-
-```
-==================================================
-SWING-TRADE STRATEGY PERFORMANCE REPORT (2014-2015)
-==================================================
-Total Cumulative Return: X.XX%
-Annualized Sharpe Ratio: X.XXXX
-Average Weekly Turnover: X.XX%
-==================================================
-```
-
-and saves a diagnostic dashboard to `reports/backtest_results_dashboard.png`.
+Step 5 prints performance reports for the **Validation** and **Test** segments
+and saves diagnostic dashboards to `reports/`.
 
 ---
 
@@ -191,29 +182,84 @@ these directly to customize a run:
 |---|---|---|---|
 | `TARGET_UNIVERSE` / `VALIDATED_UNIVERSE` / `tickers` | `data_engine.py`, `regime_pipeline.py`, `backtester.py` | `["AAPL", "AMD", "SPY", "TSLA"]` | Asset universe (must match across all three) |
 | `START_HORIZON` / `START_DATE` | `data_engine.py`, `regime_pipeline.py` | `2014-01-01` | Start of data pull / feature window |
-| `END_HORIZON` / `END_DATE` | `data_engine.py`, `regime_pipeline.py` | `2022-03-01` / `2015-12-31` | End of data pull / feature window — **note:** these two currently differ; align them for a full-horizon run |
+| `END_HORIZON` / `END_DATE` | `data_engine.py`, `regime_pipeline.py` | `2022-03-01` | End of data pull / feature window |
 | `n_regimes` | `regime_pipeline.py` (`fit_market_hmm` call) | `2` | Number of HMM hidden states |
 | Rebalance frequency | `backtester.py` (`pd.date_range(..., freq='W-FRI')`) | Weekly, Fridays | Backtest rebalance cadence |
 | Warm-up window | `backtester.py` | 26 weeks | Burn-in period before the first rebalance |
 | Transaction cost | `backtester.py` | 10 bps × turnover | Per-rebalance cost assumption |
 | MCMC sampling config | `utils.fit_hierarchical_bayes` | 4 chains / 2,000 draws / 1,500 tuning | PyMC/NUTS sampler settings |
+| Sentiment column | `backtester.py` | `Sentiment_Mean` | Feature used for Bayesian predictions |
 
 ---
 
 ## Outputs
 
 - **Console report** — cumulative return, annualized Sharpe ratio, average
-  weekly turnover, plus skip-reason diagnostics if any rebalance periods
-  were dropped (missing regime labels, missing forward returns, etc.).
+  weekly turnover, directional-skill diagnostics, and statistical-significance
+  tests (strategy vs equal-weight benchmark) for both Validation and Test segments.
 - **`reports/regime_{n}_optimization.png`** — efficient frontier scatter
   (simulated random portfolios + individual assets + optimal portfolio) and
   a bar chart of optimal weights, for a single regime/feature snapshot.
-- **`reports/backtest_results_dashboard.png`** — four-panel summary of the
-  full walk-forward run:
+- **`reports/backtest_results_dashboard_validation.png`** and
+  **`reports/backtest_results_dashboard_test.png`** — four-panel summaries of
+  the walk-forward runs:
   1. Cumulative net return, shaded by active regime
   2. Portfolio drawdown
   3. Allocation weights over time (stacked area, by ticker)
   4. Turnover per rebalance
+
+---
+
+## Results
+
+Latest walk-forward backtest (sentiment column = `Sentiment_Mean`).  
+Master dataset: 8 216 rows, 2014-01-03 → 2022-03-01.
+
+### Validation (2020-01-15 → 2020-12-31) — 50 weekly periods
+
+| Metric                        | Strategy | Equal-Wt Benchmark |
+|-------------------------------|----------|--------------------|
+| Total Cumulative Return       | 4.45%    | 0.19%              |
+| Annualized Sharpe Ratio       | 0.3130   | 0.0866             |
+| Average Weekly Turnover       | 11.54%   | —                  |
+
+**Directional skill** (200 asset-period observations)  
+- Accuracy: 54.00%  
+- Precision (predicted “up”): 0.5057  
+- Recall (predicted “up”): 0.4731  
+- F1: 0.4889  
+- Confusion matrix: [[TN=64, FP=43], [FN=49, TP=44]]
+
+**Statistical significance** (strategy excess return vs benchmark)  
+- Mean weekly excess return: 0.1107%  
+- t-statistic: 0.3507  
+- p-value (two-sided): 0.7273  
+- 95% bootstrap CI: [−0.5080%, 0.6958%]  
+- **Verdict:** excess return is **not** statistically distinguishable from zero at this sample size.
+
+### Test (2021-01-15 → 2022-03-01) — 59 weekly periods
+
+| Metric                        | Strategy | Equal-Wt Benchmark |
+|-------------------------------|----------|--------------------|
+| Total Cumulative Return       | 12.42%   | 7.93%              |
+| Annualized Sharpe Ratio       | 0.7694   | 0.6668             |
+| Average Weekly Turnover       | 14.96%   | —                  |
+
+**Directional skill** (236 asset-period observations)  
+- Accuracy: 53.39%  
+- Precision (predicted “up”): 0.5800  
+- Recall (predicted “up”): 0.6493  
+- F1: 0.6127  
+- Confusion matrix: [[TN=39, FP=63], [FN=47, TP=87]]
+
+**Statistical significance** (strategy excess return vs benchmark)  
+- Mean weekly excess return: 0.0789%  
+- t-statistic: 0.7612  
+- p-value (two-sided): 0.4496  
+- 95% bootstrap CI: [−0.1210%, 0.2824%]  
+- **Verdict:** excess return is **not** statistically distinguishable from zero at this sample size.
+
+> **Interpretation note.** The strategy outperforms the equal-weight benchmark on both cumulative return and Sharpe in both segments, but the excess-return edge is not statistically significant given the modest number of weekly observations. Treat these figures as exploratory.
 
 ---
 
@@ -248,8 +294,8 @@ these directly to customize a run:
   no bid-ask spread or market-impact modeling.
 - **Small universe.** Four assets, chosen to validate the pipeline
   end-to-end — not intended as a diversified, production-ready portfolio.
-- **Date range mismatch.** `data_engine.py` defaults to a 2014–2022 pull
-  while `regime_pipeline.py` defaults to 2014–2015 — align `START_DATE`/
-  `END_DATE` across scripts before running a full-horizon backtest.
+- **Limited statistical power.** With ~50–60 weekly observations the
+  excess-return tests lack power to detect modest edges; larger samples
+  (or higher-frequency rebalancing) would be needed for firmer inference.
 
 ---
