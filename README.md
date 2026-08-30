@@ -4,9 +4,9 @@ Swing-trading strategy that combines **skilled-minority sentiment identification
 
 The strategy's core idea: social-media sentiment (Stocktwits) may carry
 predictive signal about near-term returns, but the strength of that
-relationship likely depends on (a) *who* is posting — most crowd sentiment is
+relationship likely depends on (a) *who* is posting most crowd sentiment is
 noise, and only a "skilled minority" of forecasters have any real call-timing
-edge — and (b) the prevailing market regime. Rather than fit one pooled model
+edge and (b) the prevailing market regime. Rather than fit one pooled model
 across all conditions on the raw, unweighted sentiment, this project first
 isolates and extremizes the skilled minority's signal, then fits **separate
 Bayesian return models per volatility regime** on top of it, using whichever
@@ -16,7 +16,7 @@ model is active at each rebalance date to drive portfolio construction.
 > extremizing branch (Stage 1.5) is now fully wired into the rest of the
 > pipeline and has been run end-to-end as a head-to-head ablation against
 > the original naive-sentiment approach. **The ablation result is a
-> negative one** — see [Ablation Findings](#ablation-findings) before
+> negative one** see [Ablation Findings](#ablation-findings) before
 > assuming the more sophisticated signal is an improvement. See
 > [Limitations](#limitations) before drawing any performance conclusions
 > more broadly.
@@ -66,7 +66,7 @@ direct, apples-to-apples comparison. See
 | 3     | `regime_models.py`    | Fits a hierarchical Bayesian regression (PyMC/NUTS) per regime, pooling statistical strength across tickers, using whichever `--sentiment-column` is passed | `data/processed/{TICKER}_with_regimes.csv` (all tickers) | `data/regime_{n}_posterior{suffix}.nc`, `data/regime_{n}_coefficients{suffix}.csv` |
 | 4     | `portfolio_engine.py` | Demonstrates a single-period optimal allocation for a given regime + feature snapshot; plots the efficient frontier                                      | `data/regime_{n}_posterior{suffix}.nc`                   | `reports/regime_{n}_optimization{suffix}.png`                         |
 | 5     | `backtester.py`       | Runs a weekly walk-forward simulation over a **validation** period and a subsequent **test** period: detect active regime → generate Bayesian (μ, Σ) → optimize weights → apply turnover cost → realize forward return. Reports return/Sharpe metrics, a directional-skill diagnostic, and a statistical-significance test for each segment. | `data/processed/{TICKER}_with_regimes.csv`, posteriors   | Console performance report + `reports/backtest_results_dashboard_{segment}{suffix}.png` |
-| —     | `check_momentum_confound.py` | Diagnostic (not part of the main sequence): checks whether `Sentiment_Extremized` correlates with the ticker's own trailing price momentum more than `Sentiment_Mean` does — used to help distinguish "the extremized signal is genuine crowd information" from "it's just an indirect encoding of recent trend" | `data/processed/{TICKER}_with_regimes.csv`               | `data/momentum_confound_diagnostic.csv`                               |
+| —     | `check_momentum_confound.py` | Diagnostic (not part of the main sequence): checks whether `Sentiment_Extremized` correlates with the ticker's own trailing price momentum more than `Sentiment_Mean` does used to help distinguish "the extremized signal is genuine crowd information" from "it's just an indirect encoding of recent trend" | `data/processed/{TICKER}_with_regimes.csv`               | `data/momentum_confound_diagnostic.csv`                               |
 
 `{suffix}` is empty for the default `Sentiment_Mean` run and
 `_sentiment_extremized` when `--sentiment-column=Sentiment_Extremized` is
