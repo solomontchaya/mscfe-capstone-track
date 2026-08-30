@@ -250,7 +250,14 @@ def run_segment_backtest(master_df, tickers, base_dir, reports_dir,
 
         try:
             idata = load_saved_posterior(base_dir, predicted_regime, suffix=output_suffix)
-            mu_b, sigma_b = generate_bayesian_inputs(idata, real_features, tickers, sentiment_column=sentiment_column)
+            # Seed varies deterministically per period (idx) so each rebalance
+            # gets independent-but-reproducible posterior-predictive noise,
+            # rather than every period silently reusing the identical
+            # underlying random draws from a single fixed seed.
+            mu_b, sigma_b = generate_bayesian_inputs(
+                idata, real_features, tickers, sentiment_column=sentiment_column,
+                random_seed=42 + idx
+            )
             mu_b_flat = mu_b.flatten()
 
             predicted_direction = (mu_b_flat > 0).astype(int)

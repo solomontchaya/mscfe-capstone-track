@@ -481,7 +481,7 @@ def load_saved_posterior(base_dir, regime_id, suffix=""):
         raise FileNotFoundError(f"No NetCDF trace asset found at {file_path}")
     return az.from_netcdf(file_path)
 
-def generate_bayesian_inputs(idata, df_features, tickers, sentiment_column="Sentiment_Mean"):
+def generate_bayesian_inputs(idata, df_features, tickers, sentiment_column="Sentiment_Mean", random_seed=42):
     """
     Extracts posterior parameter arrays, applies feature matrices, 
     and outputs conditional return vectors and covariance structures.
@@ -491,7 +491,23 @@ def generate_bayesian_inputs(idata, df_features, tickers, sentiment_column="Sent
         posterior in `idata` was actually fit with (see load_saved_posterior's
         suffix parameter), or the coefficients and features come from two
         different models and the result is meaningless.
+
+    random_seed : the posterior-predictive draw below (np.random.normal) was
+        previously using the GLOBAL, unseeded numpy RNG -- meaning every
+        call to this function (once per rebalance period; 50-59 times per
+        backtest segment) produced a different random sample, and the
+        entire downstream backtest was NOT reproducible run-to-run even
+        with identical code, identical data, and the same saved posterior.
+        A local, seeded generator (via np.random.default_rng, which does
+        not touch or get affected by global numpy random state) fixes this.
+        Pass a different seed only if you deliberately want to see the
+        Monte Carlo variability across repeated calls (e.g. to check how
+        much a reported point estimate could plausibly move under
+        resampling) -- for normal use, leave this at the default so
+        repeated runs match.
     """
+    rng = np.random.default_rng(random_seed)
+
     # Extract structural chain arrays from the posterior trace
     posterior = idata.posterior
     
@@ -528,7 +544,7 @@ def generate_bayesian_inputs(idata, df_features, tickers, sentiment_column="Sent
                        betas_var_flat[:, t_idx] * x_var)
         
         # Generate posterior predictive draws
-        simulated_returns[:, idx] = np.random.normal(expected_mu, sigmas_flat[:, t_idx])
+        simulated_returns[:, idx] = rng.normal(expected_mu, sigmas_flat[:, t_idx])
         
     # Compile Bayesian parameters
     mu_bayesian = np.mean(simulated_returns, axis=0)
