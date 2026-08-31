@@ -16,13 +16,17 @@ def plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_path
     n_assets = len(tickers)
     
     # 1. Simulate Random Portfolios for Contextual Background Density
-    np.random.seed(42)
+    # Local generator, not global np.random.seed() -- keeps this
+    # reproducible without mutating global numpy RNG state that other
+    # parts of a longer session (or a notebook re-running cells) might
+    # depend on. Same discipline applied to utils.generate_bayesian_inputs.
+    rng = np.random.default_rng(42)
     n_simulations = 5000
     sim_returns = np.zeros(n_simulations)
     sim_vols = np.zeros(n_simulations)
     
     for i in range(n_simulations):
-        weights = np.random.dirichlet(np.ones(n_assets))
+        weights = rng.dirichlet(np.ones(n_assets))
         sim_returns[i] = np.dot(weights, mu_b)
         sim_vols[i] = np.sqrt(np.dot(weights.T, np.dot(sigma_b, weights)))
         
@@ -89,6 +93,16 @@ if __name__ == "__main__":
             SENTIMENT_COLUMN = arg.split("=", 1)[1]
     OUTPUT_SUFFIX = "" if SENTIMENT_COLUMN == "Sentiment_Mean" else f"_{SENTIMENT_COLUMN.lower()}"
 
+    # --regime=0|1 -- inspects the Low-Volatility or High-Volatility posterior.
+    # Previously hardcoded to 1; regime_models.py fits and saves both, so
+    # this script should be able to look at either without editing source.
+    CURRENT_REGIME = 1
+    for arg in sys.argv:
+        if arg.startswith("--regime="):
+            CURRENT_REGIME = int(arg.split("=", 1)[1])
+    if CURRENT_REGIME not in (0, 1):
+        raise ValueError(f"--regime must be 0 or 1, got {CURRENT_REGIME}")
+
     # Structural project root directory mapping
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -108,28 +122,28 @@ if __name__ == "__main__":
     }, index=tickers)
     mock_features.index.name = 'ticker'
     
-    current_regime = 1  # 0: Low-Vol Expansion, 1: High-Vol Stressed Bear
-    
-    print(f"[ENG] Ingesting Posteriors for Active Regime State: {current_regime} "
+    regime_label = "Low-Vol Expansion" if CURRENT_REGIME == 0 else "High-Vol Stressed Bear"
+    print(f"[ENG] Ingesting Posteriors for Active Regime State: {CURRENT_REGIME} ({regime_label}) "
           f"(sentiment_column={SENTIMENT_COLUMN})")
     try:
         # Load serialized posterior NetCDF trace
-        idata = load_saved_posterior(BASE_DIR, current_regime, suffix=OUTPUT_SUFFIX)
+        idata = load_saved_posterior(BASE_DIR, CURRENT_REGIME, suffix=OUTPUT_SUFFIX)
         mu_b, sigma_b = generate_bayesian_inputs(idata, mock_features, tickers, sentiment_column=SENTIMENT_COLUMN)
-        
-        # SAFE-GUARD: Flatten ONLY the expected return vector mu_b to 1-D (shape: 4,)
-        # Keep sigma_b as a 2-D covariance matrix (shape: 4x4)
-        mu_b_flat = mu_b.flatten()
-        
-        # Extract the diagonal (variance of each asset) for representation printing
-        if sigma_b.ndim == 2:
-            diag_uncertainty = np.diag(sigma_b)
-        else:
-            diag_uncertainty = sigma_b.flatten()
-        
+
+        # mu_b (n_assets,) and sigma_b (n_assets, n_assets) come back already
+        # in the shapes used below -- utils.generate_bayesian_inputs returns
+        # mu_bayesian via np.mean(simulated_returns, axis=0), which is
+        # already 1-D, so no reshaping is needed here.
+
+        # Per-asset posterior-predictive uncertainty (std dev), from the
+        # diagonal of the covariance matrix -- reported alongside each
+        # asset's expected return below rather than computed and discarded.
+        diag_uncertainty = np.diag(sigma_b)
+        asset_std = np.sqrt(diag_uncertainty)
+
         print("\n--- Conditional Bayesian Vectors Derived ---")
         for i, ticker in enumerate(tickers):
-            print(f"{ticker} -> Expected Return: {mu_b[i]:.6f}")
+            print(f"{ticker} -> Expected Return: {mu_b[i]:.6f}  (+/- {asset_std[i]:.6f} std)")
             
         optimal_weights = optimize_portfolio(mu_b, sigma_b)
         
@@ -141,7 +155,7 @@ if __name__ == "__main__":
         print("=========================================================")
         
         # Trigger explicit chart building pipelines
-        output_chart_file = os.path.join(REPORTS_DIR, f"regime_{current_regime}_optimization{OUTPUT_SUFFIX}.png")
+        output_chart_file = os.path.join(REPORTS_DIR, f"regime_{CURRENT_REGIME}_optimization{OUTPUT_SUFFIX}.png")
         plot_efficient_frontier(mu_b, sigma_b, tickers, optimal_weights, output_chart_file)
         
     except FileNotFoundError as e:

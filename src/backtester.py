@@ -476,7 +476,7 @@ def run_rolling_backtest():
         output_suffix=OUTPUT_SUFFIX
     )
 
-    # --- Test segment (held out; report once, do not re-tune afterward) -----
+    # Test segment 
     test_results = run_segment_backtest(
         master_df, tickers, BASE_DIR, REPORTS_DIR,
         segment_label="Test",
